@@ -1,2 +1,2 @@
-# imc-prosperity-4-backtester
+# IMC Prosperity 4 Backtester
 Backtester for IMC Prosperity 4 algorithms
