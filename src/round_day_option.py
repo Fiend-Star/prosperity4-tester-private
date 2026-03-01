@@ -1,0 +1,40 @@
+from src.data_reader import BackDataReader
+
+
+class RoundDayOption:
+    def __init__(self, round: int):
+        self.round = round
+        self.days = []
+
+    def add_day(self, day):
+        self.days.append(day)
+
+    def add_days(self, days: list[int]):
+        self.days.extend(days)
+
+    @staticmethod
+    def parse(round_day_str: list[str], data_reader: BackDataReader) -> list["RoundDayOption"] :
+        options = []
+
+        for arg in round_day_str:
+            day_num = None
+            if "-" in arg:
+                round_num, day_num = map(int, arg.split("-", 1))
+            else:
+                round_num = int(arg)
+
+            available_days = data_reader.available_days(round_num)
+
+            if day_num is not None and day_num not in available_days:
+                print(f"Warning: no data found for round {round_num} day {day_num}")
+                continue
+
+            days = [day_num] if day_num is not None else available_days
+            if len(days) == 0:
+                print(f"Warning: no data found for round {round_num}")
+                continue
+
+            option = RoundDayOption(round_num)
+            option.add_days(days)
+            options.append(option)
+        return options

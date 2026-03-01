@@ -1,0 +1,7 @@
+day;timestamp;product;bid_price_1;bid_volume_1;bid_price_2;bid_volume_2;bid_price_3;bid_volume_3;ask_price_1;ask_volume_1;ask_price_2;ask_volume_2;ask_price_3;ask_volume_3;mid_price;profit_and_loss
+-2;0;RAINFOREST_RESIN;9996;1;9995;25;;;10004;1;10005;25;;;10000.0;0.0
+-2;0;KELP;1998;26;;;;;2002;26;;;;;2000.0;0.0
+-2;0;SQUID_INK;1998;26;;;;;2002;26;;;;;2000.0;0.0
+-2;100;SQUID_INK;1999;5;1998;26;;;2001;20;;;;;2000.0;0.0
+-2;100;RAINFOREST_RESIN;10000;5;9995;20;;;10005;20;;;;;10002.5;0.0
+-2;100;KELP;2000;5;1999;6;1998;20;2002;20;;;;;2001.0;0.0
