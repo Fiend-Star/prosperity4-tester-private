@@ -35,14 +35,6 @@ class BackTester:
             if len(round.days) > 1:
                 SummaryPrinter.print_overall_summary(results)
 
-        # json_str = json.dumps([{
-        #     "round": r.round_num,
-        #     "day": r.day_num,
-        #     "sandbox_logs": [str(sl) for sl in r.sandbox_logs],
-        #     "activity_logs": [str(al) for al in r.activity_logs],
-        #     "trades": [str(t) for t in r.trades]
-        # } for r in results])
-
         merged_result = merger.merge(results)
 
         if self.options.output_file is not None:

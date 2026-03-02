@@ -209,3 +209,7 @@ __marimo__/
 
 # Paycharm
 .idea
+
+#draw.io
+.$backtester.drawio.bkp
+.$backtester.drawio.dtmp

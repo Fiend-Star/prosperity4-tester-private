@@ -46,14 +46,6 @@ class TestRunner:
             state = self.__initialize_trade_state(state, data, timestamp)
             orders = self.__run_trader(state, result, timestamp)
 
-            # dic = {
-            #         k: [
-            #             {'symbol': order.symbol, 'price': order.price, 'quantity': order.quantity} for order in v
-            #         ]
-            #         for k, v in orders.items()
-            #     }
-            # json_str = json.dumps(dic)
-
             # self.__validate_orders(orders)
             self.__create_activity_logs(state, data, result)
             self.__enforce_limits(state, data, orders, result.sandbox_logs[-1])
@@ -75,9 +67,6 @@ class TestRunner:
                 orders, conversions, trader_data = self.trader.run(state)
 
         state.traderData = trader_data
-
-        # state_json = state.toJSON()
-        # print(state_json)
 
         sandbox_row = SandboxLogRow(
             timestamp=timestamp,

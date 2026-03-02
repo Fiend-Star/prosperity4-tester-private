@@ -23,3 +23,13 @@ class BacktestResult:
     def final_activities(self) -> list[ActivityLogRow]:
         last_time_stamp = self.activity_logs[-1].timestamp
         return [activity for activity in self.activity_logs if activity.timestamp == last_time_stamp]
+
+
+    def to_dict(self) -> dict:
+        return {
+            "round": self.round_num,
+            "day": self.day_num,
+            "sandbox_logs": [str(sl) for sl in self.sandbox_logs],
+            "activity_logs": [str(al) for al in self.activity_logs],
+            "trades": [str(t) for t in self.trades]
+        }

@@ -1,3 +1,4 @@
+import json
 from abc import abstractmethod
 from collections import defaultdict
 from contextlib import contextmanager
@@ -30,7 +31,7 @@ class BackDataReader:
 
         observations_by_timestamp = {row.timestamp: row for row in observations}
 
-        return BacktestData(
+        backtest_data = BacktestData(
             round_num=round_num,
             day_num=day_num,
             prices=prices_by_timestamp,
@@ -39,6 +40,7 @@ class BackDataReader:
             products=products,
             profit_loss=profit_loss,
         )
+        return backtest_data
 
     def __get_prices(self, round_num: int, day_num: int):
         prices = []
