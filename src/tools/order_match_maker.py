@@ -1,8 +1,8 @@
 from src.datamodel import TradingState, Order, Symbol, Trade
-from src.models.back_test_data import BacktestData
-from src.models.market_trade import MarketTrade
-from src.models.trade_matching_mode import TradeMatchingMode
-from src.models.trader_row import TradeRow
+from src.models.input import BacktestData, MarketTrade
+from src.models.output import TradeRow
+from src.models.test_options import TradeMatchingMode
+
 
 # Match orders that're returned from the trading algorithm to prices in BacktestData
 # If orders are not fulfilled, and the trade_matching_mode is not TradeMatchingMode.none,
@@ -14,7 +14,6 @@ class OrderMatchMaker:
         self.back_data = back_data
         self.orders = orders
         self.trade_matching_mode = trade_matching_mode
-
 
     def match(self) -> list[TradeRow]:
         result = []
@@ -44,7 +43,6 @@ class OrderMatchMaker:
 
         return result
 
-
     def __match_order(self, order: Order, market_trades: list[MarketTrade]) -> list[Trade]:
         if order.quantity > 0:
             return self.__match_buy_order(order, market_trades)
@@ -52,7 +50,6 @@ class OrderMatchMaker:
             return self.__match_sell_order(order, market_trades)
         else:
             return []
-
 
     def __match_buy_order(self, order, market_trades) -> list[Trade]:
         trades = []
@@ -83,13 +80,11 @@ class OrderMatchMaker:
 
         return trades
 
-
     def __create_buy_order(self, order: Order, volume: int, price: int, seller: str):
         self.state.position[order.symbol] = self.state.position.get(order.symbol, 0) + volume
         self.back_data.profit_loss[order.symbol] -= price * volume
         order.quantity -= volume
         return Trade(order.symbol, price, volume, "SUBMISSION", seller, self.state.timestamp)
-
 
     def __can_match_buy_order(self, order: Order, market_trade: MarketTrade) -> bool:
         if market_trade.sell_quantity == 0:
@@ -99,7 +94,6 @@ class OrderMatchMaker:
         if market_trade.trade.price == order.price:
             return self.trade_matching_mode == TradeMatchingMode.all
         return True
-
 
     def __match_sell_order(self, order, market_trades) -> list[Trade]:
         trades = []
@@ -130,13 +124,11 @@ class OrderMatchMaker:
 
         return trades
 
-
     def __create_sell_order(self, order: Order, volume: int, price: int, buyer: str):
         self.state.position[order.symbol] = self.state.position.get(order.symbol, 0) - volume
         self.back_data.profit_loss[order.symbol] += price * volume
         order.quantity += volume
         return Trade(order.symbol, price, volume, buyer,"SUBMISSION", self.state.timestamp)
-
 
     def __can_match_sell_order(self, order: Order, market_trade: MarketTrade) -> bool:
         if market_trade.buy_quantity == 0:
@@ -146,7 +138,6 @@ class OrderMatchMaker:
         if market_trade.trade.price == order.price:
             return self.trade_matching_mode == TradeMatchingMode.all
         return True
-
 
     # deduct volume from orders. If the volume becomes 0 after deduction, then remove the order from the order dict.
     # orders is a dict of price -> volume.

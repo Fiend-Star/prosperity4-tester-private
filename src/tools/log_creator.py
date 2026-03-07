@@ -1,6 +1,7 @@
 from src.datamodel import TradingState
-from src.models.acttivty_row import ActivityLogRow
-from src.models.back_test_data import BacktestData
+from src.models.output import ActivityLogRow
+from src.models.input import BacktestData
+
 
 class ActivityLogCreator:
 

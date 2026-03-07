@@ -1,5 +1,5 @@
 from pathlib import Path
-from src.models.backtest_result import BacktestResult
+from src.models.output import BacktestResult
 
 
 class OutputFileWriter:

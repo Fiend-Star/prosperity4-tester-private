@@ -1,4 +1,26 @@
-from src.data_reader import BackDataReader
+from pathlib import Path
+from enum import Enum
+from src.tools.data_reader import BackDataReader
+
+
+class TradeMatchingMode(str, Enum):
+    all = "all"
+    worse = "worse"
+    none = "none"
+
+
+class TestOptions:
+    def __init__(self, algorithm_path: Path, round_day: list[str], output_file: Path):
+        self.algorithm_path = algorithm_path
+        self.round_day = round_day
+        self.output_file = output_file
+        self.back_data_dir = None
+        self.print_output = False
+        self.trade_matching_mode = TradeMatchingMode.all
+        self.show_progress = False
+        self.merge_profit_loss = False
+        self.show_visualizer = False
+        self.merge_timestamps = True
 
 
 class RoundDayOption:
@@ -13,7 +35,7 @@ class RoundDayOption:
         self.days.extend(days)
 
     @staticmethod
-    def parse(round_day_str: list[str], data_reader: BackDataReader) -> list["RoundDayOption"] :
+    def parse(round_day_str: list[str], data_reader: BackDataReader) -> list["RoundDayOption"]:
         options = []
 
         for arg in round_day_str:
@@ -38,3 +60,4 @@ class RoundDayOption:
             option.add_days(days)
             options.append(option)
         return options
+

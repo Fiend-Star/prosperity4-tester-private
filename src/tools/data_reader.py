@@ -1,4 +1,3 @@
-import json
 from abc import abstractmethod
 from collections import defaultdict
 from contextlib import contextmanager
@@ -6,9 +5,8 @@ from importlib import resources
 from pathlib import Path
 from typing import ContextManager, Optional
 from src.datamodel import Trade, Symbol
-from src.models.back_test_data import BacktestData
-from src.models.observation_row import ObservationRow
-from src.models.price_row import PriceRow
+from src.models.input import PriceRow, ObservationRow, BacktestData
+
 
 
 class BackDataReader:

@@ -1,11 +1,10 @@
 import sys
 from datetime import datetime
 from typer import Argument, Option, Typer
-from typing import Annotated, Any, Optional
+from typing import Annotated, Optional
 from pathlib import Path
 from src.back_tester import BackTester
-from src.models.trade_matching_mode import TradeMatchingMode
-from src.test_options import TestOptions
+from src.models.test_options import TestOptions, TradeMatchingMode
 
 app = Typer(context_settings={"help_option_names": ["--help", "-h"]})
 
