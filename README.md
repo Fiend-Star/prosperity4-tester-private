@@ -13,7 +13,7 @@ This repository contains a Python-based backtester designed in preparation for t
 
 The architecture of the program is modularized to cleanly separate data loading, simulation execution, and order matching. Below is the structural diagram of the backtester:
 
-![Backtester Architecture](backtester.png)
+![Backtester Architecture](images/backtester.png)
 
 ### Component Breakdown & Execution Flow
 
@@ -40,3 +40,38 @@ The `TestRunner` is responsible for simulating the market environment for a sing
 * **`BackDataReader`:** Handles the file ingestion of CSV price and trade data into programmatic objects.
 * **`ActivityLogCreator`:** Responsible for standardizing and formatting the activity logs for later analysis and debugging.
 * **`OrderMatchMaker`:** The internal simulation engine that determines which algorithm orders execute and updating positions.
+## Explanation of Data Models
+
+The backtester relies on a specific set of data models to process market information and log simulation results cleanly. 
+
+* **`datamodel.py`**: This file contains the core data models that are shared between the `BackTester` and your custom `Algorithm`. **(Please do not change this file)**. Modifying it may break compatibility with the official Prosperity environment.
+* **`models/` directory**: The models located within the `models` folder are specifically defined for the internal operations of the `BackTester`.
+* **Input Data Models (`models/input.py`)**: This file defines the models that capture the raw market data from the input files. During the setup phase, data is extracted from the price data files and trade data files:
+
+  **Price Data:**
+  
+* ![Price Data](images/price_data.png)
+
+  **Trade Data:**
+  
+* ![Trade Data](images/trade_data.png)
+
+  This raw data is then structured and filled into the `BacktestData` model, which acts as the data source for the simulation:
+
+  **Backtest Data:**
+  
+* ![Backtest Data](images/back_test_data.png)
+
+* **Result Data Models (`models/input.py`)**: Models defined here are also responsible for capturing the test result data generated during the simulation. 
+  
+  Once the backtest is complete, the system compiles the findings into a `BacktestResult` object:
+
+  **Backtest Result:**
+  
+* ![Backtest Result](images/result_final_stage.png)
+
+  Finally, this structured result data is written directly into the standard output log file so you can review your algorithm's performance and activities:
+
+  **Output Log File:**
+  
+* ![Output Log File](images/out_put_log_file.png)
