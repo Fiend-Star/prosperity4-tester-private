@@ -79,6 +79,8 @@ class BackDataReader:
 
     @abstractmethod
     def available_days(self, round: int) -> list[int]:
+        if round == 0:
+            return [-2, -1]
         if round == 1:
             return [-3, -2, -1, 0]
         if round == 2:
