@@ -21,6 +21,7 @@ def run(
     merge_pnl: Annotated[bool, Option("--merge-pnl", help="Merge profit and loss across days.")] = True,
     vis: Annotated[bool, Option("--vis", help="Open backtest results in https://jmerle.github.io/imc-prosperity-3-visualizer/ when done.")] = False,
     original_timestamps: Annotated[bool, Option("--original-timestamps", help="Preserve original timestamps in output log rather than making them increase across days.")] = False,
+    ticks: Annotated[Optional[int], Option("--ticks", help="Maximum number of ticks to simulate per day.")] = None,
 ):
     if out is not None and no_out:
         print("Error: --out and --no-out are mutually exclusive")
@@ -34,6 +35,7 @@ def run(
     options.merge_profit_loss = merge_pnl
     options.show_visualizer = vis
     options.merge_timestamps = not original_timestamps
+    options.max_ticks = ticks
 
     back_tester = BackTester(options)
     back_tester.run()
