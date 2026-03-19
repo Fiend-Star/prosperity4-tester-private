@@ -76,7 +76,8 @@ class BackTester:
             day,
             self.options.show_progress,
             self.options.print_output,
-            self.options.trade_matching_mode)
+            self.options.trade_matching_mode,
+            self.options.max_ticks)
         result = test_runner.run()
         return result
 

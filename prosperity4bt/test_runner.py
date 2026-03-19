@@ -15,7 +15,7 @@ from prosperity4bt.tools.order_match_maker import OrderMatchMaker
 
 class TestRunner:
 
-    def __init__(self, trader, data_reader: BackDataReader, round: int, day: int, show_progress_bar: bool=False, print_output: bool=False, trade_matching_mode=TradeMatchingMode.all):
+    def __init__(self, trader, data_reader: BackDataReader, round: int, day: int, show_progress_bar: bool=False, print_output: bool=False, trade_matching_mode=TradeMatchingMode.all, max_ticks: int=None):
         self.trader = trader
         self.data_reader = data_reader
         self.round = round
@@ -23,6 +23,7 @@ class TestRunner:
         self.show_progress_bar = show_progress_bar
         self.print_output = print_output
         self.trade_matching_mode = trade_matching_mode
+        self.max_ticks = max_ticks
 
 
     def run(self):
@@ -40,6 +41,8 @@ class TestRunner:
         result = BacktestResult(data.round_num, data.day_num)
 
         timestamps = sorted(data.prices.keys())
+        if self.max_ticks is not None:
+            timestamps = timestamps[:self.max_ticks]
         timestamps_iterator = tqdm(timestamps, ascii=True) if self.show_progress_bar else timestamps
         for timestamp in timestamps_iterator:
             state = self.__initialize_trade_state(state, data, timestamp)
