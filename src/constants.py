@@ -1,4 +1,4 @@
 LIMITS = {
-    "TOMATOES": 20,
-    "EMERALDS": 20
+    "TOMATOES": 80,
+    "EMERALDS": 80
 }

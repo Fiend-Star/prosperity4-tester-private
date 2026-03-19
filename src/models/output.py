@@ -1,3 +1,5 @@
+import uuid
+
 import orjson
 from typing import Any
 from dataclasses import dataclass
@@ -32,6 +34,13 @@ class SandboxLogRow:
             option=orjson.OPT_APPEND_NEWLINE | orjson.OPT_INDENT_2,
         ).decode("utf-8")
 
+    def to_dict(self):
+        return {
+            "sandboxLog": self.sandbox_log,
+            "lambdaLog": self.lambda_log,
+            "timestamp": self.timestamp
+        }
+
 
 @dataclass
 class ActivityLogRow:
@@ -59,6 +68,10 @@ class ActivityLogRow:
     def __str__(self) -> str:
         return ";".join(map(str, self.columns))
 
+    @staticmethod
+    def get_header_str() -> str:
+        return 'day;timestamp;product;bid_price_1;bid_volume_1;bid_price_2;bid_volume_2;bid_price_3;bid_volume_3;ask_price_1;ask_volume_1;ask_price_2;ask_volume_2;ask_price_3;ask_volume_3;mid_price;profit_and_loss'
+
 
 @dataclass
 class TradeRow:
@@ -79,6 +92,17 @@ class TradeRow:
                 self.trade.timestamp + timestamp_offset,
             )
         )
+
+    def to_dict(self):
+        return {
+            "timestamp": self.trade.timestamp,
+            "buyer": self.trade.buyer,
+            "seller": self.trade.seller,
+            "symbol": self.trade.symbol,
+            "currency": "XIREC",
+            "price": self.trade.price,
+            "quantity": self.trade.quantity,
+        }
 
     def __str__(self) -> str:
         return (
@@ -120,9 +144,8 @@ class BacktestResult:
 
     def to_dict(self) -> dict:
         return {
-            "round": self.round_num,
-            "day": self.day_num,
-            "sandbox_logs": [str(sl) for sl in self.sandbox_logs],
-            "activity_logs": [str(al) for al in self.activity_logs],
-            "trades": [str(t) for t in self.trades]
+            "submissionId": str(uuid.uuid4()),
+            "activitiesLog": ActivityLogRow.get_header_str() + '\n' +'\n'.join([str(al) for al in self.activity_logs]),
+            "logs": [sl.to_dict() for sl in self.sandbox_logs],
+            "tradeHistory": [t.to_dict() for t in self.trades]
         }
