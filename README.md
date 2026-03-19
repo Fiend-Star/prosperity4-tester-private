@@ -12,15 +12,9 @@ This repository contains a Python-based backtester designed in preparation for t
 **Usage:**
 Basic usage:
 
-
-Install the latest version of the backtester
-```bash
- $ pip install -U prosperity4bt
- ```
-
 Run the backtester on an algorithm using all data from round 0
 ```bash
- $ prosperity4bt <path to algorithm file> 0
+ $ python -m prosperity4bt <path to algorithm file> 0
  ```
 
 If you see: `No module named 'datamodel'`, set PYTHONPATH to the folder containing datamodel.py:  
