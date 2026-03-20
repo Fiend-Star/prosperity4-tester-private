@@ -114,7 +114,8 @@ def build_strategy(params):
     coef_expr = "+".join(f"{reg_coefs[i]}*c[{i}]" for i in range(lag))
     reg_line = f"fv={intercept}+{coef_expr}"
 
-    code = f'''import json
+    code = f'''import json, random
+random.seed(42)  # deterministic sim mode
 from datamodel import Order, TradingState
 class Trader:
     def __init__(self):
@@ -200,8 +201,10 @@ class Trader:
     return code
 
 
+MATCH_MODE = os.environ.get('SWEEP_MATCH_MODE', 'default')  # set SWEEP_MATCH_MODE=sim to use sim mode
+
 def run_backtest(day, verbose=False):
-    cmd = f'python -m prosperity4bt "{TMP}" 0-{day} --no-out --no-progress --ticks 2000 --iterations 1000'
+    cmd = f'python -m prosperity4bt "{TMP}" 0-{day} --no-out --no-progress --ticks 2000 --iterations 1000 --match-mode {MATCH_MODE}'
     r = subprocess.run(cmd, capture_output=True, text=True, shell=True, cwd=ROOT_DIR)
     m = re.search(r'Total profit: ([\d,]+)', r.stdout)
     if m:
