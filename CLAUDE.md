@@ -317,6 +317,35 @@ trader-logic/round-0/
 └── experiments/{wall_mid,l2_features,execution,pde_fk,asymmetric,misc}
 ```
 
+## Parameter Optimization Scripts
+
+| Script | What it sweeps | Combos | Runtime |
+|--------|---------------|--------|---------|
+| `grid_search.py` | Full Cartesian of 7 params | 864 | ~43 min |
+| `mega_sweep.py` | 7 independent dimension sweeps | ~488 | ~25 min |
+
+**mega_sweep.py dimensions:**
+- S0: Lag sizes [2,3,4,5,6,8] with auto-refit regression
+- S1: Regression intercept + lag-4 coefficient
+- S2: Trade flow (coef × window × normalization)
+- S3: Position management (threshold × aggression × liq window)
+- S4: Directional posting (trigger × width × decay)
+- S5: EMERALDS (pos threshold × aggression × liq params)
+- S6: Posting offset + EMA smoothing
+
+**Run:** `python -u trader-logic/round-0/mega_sweep.py` (unbuffered for live output)
+**Output:** `trader-logic/round-0/mega_sweep_results.json` (top 20 per sweep + landscape analysis)
+
+## God Scripts (Troll/Oracle)
+
+| Script | Method | Website Score |
+|--------|--------|--------------|
+| `god_logger.py` | Places ZERO orders, captures pristine market data | 0 (by design) |
+| `god_mode.py` | Naive oracle: one-sided posting from 50-tick lookahead | 2,248 |
+| `god_mode_dp.py` | DP backward induction: 322k states, spread-cost-aware | 2,523 |
+
+**Key finding:** Website market data is 100% deterministic — clean logger data matches trading-run data perfectly (0 differences across 4,000 rows). Our orders do NOT change the book. The DP oracle scores WORSE than our legit strategy because spread crossing costs exceed directional gains in a static-book simulation.
+
 ## P3 vs P4 Data Comparison
 
 P3 Kelp/Resin data is **completely different** from P4 TOMATOES/EMERALDS:
