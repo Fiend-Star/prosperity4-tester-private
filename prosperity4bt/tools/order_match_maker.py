@@ -18,6 +18,12 @@ TAKER_PARAMS = {
 }
 TICK_MS = 100
 
+# Distance-decay for taker fill probability
+# Wider quotes get hit less often: p_fill = exp(-TAKER_DECAY * spread_ticks)
+# k=0.007: spread=13 → p=0.91, spread=5 → p=0.97
+# Calibrated against 8 strategies (k sweep 0.000-0.010), avg_err=95
+TAKER_DECAY = 0.007
+
 
 # =========================================================================
 # Inline OrderBook — port of extracted IMC simulation/orderbook.py
@@ -429,13 +435,24 @@ class OrderMatchMaker:
                     taker_sells = random.random() < 0.5  # 50/50 side
 
                     if taker_sells and book.best_bid is not None:
-                        # Taker sells → hits best bid (could be our posted buy)
                         hit_price = book.best_bid
-                        book.add_sell(hit_price, taker_qty, "TAKER")
+                        # Distance-decay: wider spread = less likely to fill
+                        if book.best_ask is not None:
+                            spread = book.best_ask - book.best_bid
+                            p_fill = math.exp(-TAKER_DECAY * spread)
+                        else:
+                            p_fill = 1.0
+                        if random.random() < p_fill:
+                            book.add_sell(hit_price, taker_qty, "TAKER")
                     elif not taker_sells and book.best_ask is not None:
-                        # Taker buys → hits best ask (could be our posted sell)
                         hit_price = book.best_ask
-                        book.add_buy(hit_price, taker_qty, "TAKER")
+                        if book.best_bid is not None:
+                            spread = book.best_ask - book.best_bid
+                            p_fill = math.exp(-TAKER_DECAY * spread)
+                        else:
+                            p_fill = 1.0
+                        if random.random() < p_fill:
+                            book.add_buy(hit_price, taker_qty, "TAKER")
 
                     # Match taker crosses
                     taker_trades = book._match()
