@@ -130,7 +130,7 @@ class Trader:
                 buys=sorted(od.buy_orders.items(),reverse=True);sells=sorted(od.sell_orders.items())
                 self.ew.append(abs(pos)==80)
                 if len(self.ew)>10: self.ew=self.ew[-10:]
-                soft=len(self.ew)==10 and sum(self.ew)>={params['EM_LIQ_SOFT']} and self.ew[-1]
+                soft=len(self.ew)==10 and sum(self.ew)>=3 and self.ew[-1]
                 hard=len(self.ew)==10 and all(self.ew)
                 embp=10000-{params['EM_AGGRESSION']} if pos>40 else 10000
                 emsp=10000+{params['EM_AGGRESSION']} if pos<-40 else 10000
