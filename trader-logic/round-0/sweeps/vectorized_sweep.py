@@ -15,7 +15,7 @@ The strategy logic is simplified to its core:
   post: at best±offset (fills determined by taker bot arrival)
   PnL = sum of (fill_edge * fill_qty) + position * (final_mid - entry_avg)
 
-Run: python -u trader-logic/round-0/vectorized_sweep.py
+Run: python -u trader-logic/round-0/sweeps/vectorized_sweep.py
 """
 
 import csv, os, time, json, math
@@ -33,7 +33,7 @@ except ImportError:
     GPU = False
     print("Using NumPy (CPU) — install cupy-cuda12x for GPU acceleration")
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 DATA_DIR = os.path.join(ROOT, 'prosperity4bt', 'resources', 'round0')
 
 

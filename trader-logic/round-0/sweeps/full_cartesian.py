@@ -2,14 +2,14 @@
 FULL CARTESIAN: Every combination of every tunable parameter.
 This is the brute-force "try everything" approach.
 
-Run: python -u trader-logic/round-0/full_cartesian.py
+Run: python -u trader-logic/round-0/sweeps/full_cartesian.py
 """
 
 import subprocess, re, json, os, sys, time, itertools, csv, math
 from collections import Counter
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(BASE_DIR)))
 TMP = os.path.join(BASE_DIR, '_cart_tmp.py')
 
 # ============================================================
@@ -159,23 +159,23 @@ class Trader:
                 trades=state.market_trades.get("TOMATOES")
                 if trades: sv=sum(t.quantity if t.price>=mid else -t.quantity for t in trades);self.tf.append(sv)
                 else: self.tf.append(0.0)
-                if len(self.tf)>{params['FLOW_WINDOW']}: self.tf=self.tf[-{params['FLOW_WINDOW']}:]
-                fs=max(-1.0,min(1.0,sum(self.tf)/{params['FLOW_NORM']}))
+                if len(self.tf)>5: self.tf=self.tf[-5:]
+                fs=max(-1.0,min(1.0,sum(self.tf)/15.0))
                 fv-=fs*{params['FLOW_COEF']}
                 tv=round(fv)
                 if self.pb is not None:
                     bc=bb-self.pb
                     if bc>={params['DIR_TRIGGER']}: self.sig=-1
                     elif bc<=-{params['DIR_TRIGGER']}: self.sig=1
-                    elif abs(bc)<=1: self.sig*={params['DIR_DECAY']}
+                    elif abs(bc)<=1: self.sig*=0.7
                 self.pb=bb
                 self.tw.append(abs(pos)==80)
-                if len(self.tw)>{params['TOM_LIQ_WINDOW']}: self.tw=self.tw[-{params['TOM_LIQ_WINDOW']}:]
-                tsoft=len(self.tw)=={params['TOM_LIQ_WINDOW']} and sum(self.tw)>={params['TOM_LIQ_WINDOW']}//2 and self.tw[-1]
-                thard=len(self.tw)=={params['TOM_LIQ_WINDOW']} and all(self.tw)
+                if len(self.tw)>10: self.tw=self.tw[-10:]
+                tsoft=len(self.tw)==10 and sum(self.tw)>=5 and self.tw[-1]
+                thard=len(self.tw)==10 and all(self.tw)
                 tb=80-pos;ts=80+pos
-                mbp=tv-{params['TOM_AGGR_TICK']} if pos>{params['TOM_POS_THRESH']} else tv
-                msp=tv+{params['TOM_AGGR_TICK']} if pos<-{params['TOM_POS_THRESH']} else tv
+                mbp=tv-{params['TOM_AGGR_TICK']} if pos>40 else tv
+                msp=tv+{params['TOM_AGGR_TICK']} if pos<-40 else tv
                 for p,v in sorted(od.sell_orders.items()):
                     if tb>0 and p<=mbp: q=min(tb,-v);to.append(Order("TOMATOES",p,q));tb-=q
                 if tb>0 and thard: q=tb//2;to.append(Order("TOMATOES",tv,q));tb-=q
