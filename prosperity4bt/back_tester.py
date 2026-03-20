@@ -78,7 +78,8 @@ class BackTester:
             self.options.print_output,
             self.options.trade_matching_mode,
             self.options.max_ticks,
-            self.options.iterations)
+            self.options.iterations,
+            self.options.match_mode)
         result = test_runner.run()
         return result
 

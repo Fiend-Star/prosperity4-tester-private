@@ -4,7 +4,7 @@ from typer import Argument, Option, Typer
 from typing import Annotated, Optional
 from pathlib import Path
 from prosperity4bt.back_tester import BackTester
-from prosperity4bt.models.test_options import TestOptions, TradeMatchingMode
+from prosperity4bt.models.test_options import TestOptions, TradeMatchingMode, MatchMode
 
 app = Typer(context_settings={"help_option_names": ["--help", "-h"]})
 
@@ -23,6 +23,7 @@ def run(
     original_timestamps: Annotated[bool, Option("--original-timestamps", help="Preserve original timestamps in output log rather than making them increase across days.")] = False,
     ticks: Annotated[Optional[int], Option("--ticks", help="Maximum number of ticks to simulate per day.")] = None,
     iterations: Annotated[Optional[int], Option("--iterations", help="Number of times run() is called per day. Simulates test (1000) or final (10000) scoring cadence. Between calls, resting orders persist.")] = None,
+    match_mode: Annotated[MatchMode, Option("--match-mode", help="Matching mode: 'default' (>= crossing), 'imc' (== exact + taker sim), 'strict' (== exact only).")] = MatchMode.default,
 ):
     if out is not None and no_out:
         print("Error: --out and --no-out are mutually exclusive")
@@ -38,6 +39,7 @@ def run(
     options.merge_timestamps = not original_timestamps
     options.max_ticks = ticks
     options.iterations = iterations
+    options.match_mode = match_mode
 
     back_tester = BackTester(options)
     back_tester.run()
