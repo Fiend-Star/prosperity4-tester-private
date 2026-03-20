@@ -125,40 +125,33 @@ class Trader:
 
                 tv = round(fv)
 
-                # --- Step 2: Aggressive Takes (proven from s25) ---
-                take_buy_cap = min(BUFFER, 80 - pos)
-                take_sell_cap = min(BUFFER, 80 + pos)
+                # --- Step 2: Aggressive Takes FIRST (full capacity, proven from s25) ---
+                tb = 80 - pos  # total buy capacity
+                ts = 80 + pos  # total sell capacity
 
                 # Position aggression on takes (from s25)
                 take_bid = tv - 1 if pos > 40 else tv
                 take_ask = tv + 1 if pos < -40 else tv
 
                 for p, v in sorted(od.sell_orders.items()):
-                    if take_buy_cap > 0 and p <= take_bid:
-                        q = min(take_buy_cap, -v)
+                    if tb > 0 and p <= take_bid:
+                        q = min(tb, -v)
                         to.append(Order("TOMATOES", p, q))
-                        take_buy_cap -= q
+                        tb -= q
 
                 for p, v in sorted(od.buy_orders.items(), reverse=True):
-                    if take_sell_cap > 0 and p >= take_ask:
-                        q = min(take_sell_cap, v)
+                    if ts > 0 and p >= take_ask:
+                        q = min(ts, v)
                         to.append(Order("TOMATOES", p, -q))
-                        take_sell_cap -= q
+                        ts -= q
 
-                # --- Step 3: Inside MM Posting ---
-                # Inventory skew: shift mid based on position
+                # --- Step 3: Inside MM Posting with REMAINING capacity ---
                 skew = max(-MAX_SKEW, min(MAX_SKEW, -pos * SKEW_FACTOR))
                 skewed_mid = round(fv + skew)
 
-                # Smooth position-aware sizing (no hard cutoffs)
-                bid_size = max(0, 80 - pos - BUFFER)
-                ask_size = max(0, 80 + pos - BUFFER)
-
-                # Subtract what we already took
-                bid_size = min(bid_size, 80 - pos - sum(o.quantity for o in to if o.quantity > 0))
-                ask_size = min(ask_size, 80 + pos - sum(abs(o.quantity) for o in to if o.quantity < 0))
-                bid_size = max(0, bid_size)
-                ask_size = max(0, ask_size)
+                # Post with whatever capacity is left after taking
+                bid_size = tb  # already reduced by takes above
+                ask_size = ts
 
                 # Post inside the MM spread
                 bid_price = max(skewed_mid - OFFSET, bb + 1)
