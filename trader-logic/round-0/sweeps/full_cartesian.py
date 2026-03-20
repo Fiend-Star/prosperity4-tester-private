@@ -10,7 +10,8 @@ from collections import Counter
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(BASE_DIR)))
-TMP = os.path.join(BASE_DIR, '_cart_tmp.py')
+ROUND_DIR = os.path.dirname(BASE_DIR)  # trader-logic/round-0/ where datamodel.py lives
+TMP = os.path.join(ROUND_DIR, '_cart_tmp.py')
 
 # ============================================================
 # FULL PARAMETER GRID — everything × everything
@@ -199,11 +200,19 @@ class Trader:
     return code
 
 
-def run_backtest(day):
+def run_backtest(day, verbose=False):
     cmd = f'python -m prosperity4bt "{TMP}" 0-{day} --no-out --no-progress --ticks 2000 --iterations 1000'
     r = subprocess.run(cmd, capture_output=True, text=True, shell=True, cwd=ROOT_DIR)
     m = re.search(r'Total profit: ([\d,]+)', r.stdout)
-    return int(m.group(1).replace(',', '')) if m else 0
+    if m:
+        return int(m.group(1).replace(',', ''))
+    if verbose or r.returncode != 0:
+        print(f"  BACKTEST FAILED (day {day}, exit={r.returncode})")
+        if r.stderr:
+            print(f"  stderr: {r.stderr[:300]}")
+        if r.stdout:
+            print(f"  stdout: {r.stdout[:300]}")
+    return 0
 
 
 def main():
@@ -231,8 +240,9 @@ def main():
         with open(TMP, 'w') as f:
             f.write(code)
 
-        d2 = run_backtest(-2)
-        d1 = run_backtest(-1)
+        verbose = (i == 0)  # show errors on first combo to catch issues early
+        d2 = run_backtest(-2, verbose=verbose)
+        d1 = run_backtest(-1, verbose=verbose)
         avg = (d2 + d1) / 2
         spread = abs(d2 - d1)
 
@@ -267,9 +277,9 @@ def main():
     for i, r in enumerate(results[:20]):
         print(f"    {i+1:3d}. avg={r['avg']:,.0f} d-2={r['d2']:,} d-1={r['d1']:,} spread={r['spread']:,}")
         p = r['params']
-        print(f"         lag={p['REG_LAGS']} int={p['INTERCEPT']} flow={p['FLOW_COEF']}/{p['FLOW_WINDOW']}/{p['FLOW_NORM']} "
-              f"pos={p['TOM_POS_THRESH']}/{p['TOM_AGGR_TICK']} dir={p['DIR_TRIGGER']}/{p['DIR_WIDTH']}/{p['DIR_DECAY']} "
-              f"em={p['EM_AGGRESSION']}/{p['EM_LIQ_SOFT']} post={p['POST_OFFSET']}")
+        print(f"         lag={p['REG_LAGS']} int={p['INTERCEPT']} flow={p['FLOW_COEF']} "
+              f"aggr={p['TOM_AGGR_TICK']} dir={p['DIR_TRIGGER']}/{p['DIR_WIDTH']} "
+              f"em={p['EM_AGGRESSION']} post={p['POST_OFFSET']}")
 
     print(f"\n  LANDSCAPE (top 50 parameter frequency):")
     for key in keys:
