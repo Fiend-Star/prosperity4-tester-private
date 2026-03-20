@@ -281,3 +281,47 @@ NOT: IC × Position Size × Volatility − Transaction Costs
 - Module 7: Full A-S Integration (`strategy/trader.py`)
 
 For Round 1: add new bot profiles, refit FV estimators per product, update toxicity rates.
+
+## Round 1 Ready-to-Deploy Templates
+
+Pre-built in `trader-logic/round-1/`:
+| Template | Product Archetype | Key Technique |
+|----------|-------------------|---------------|
+| `template_stable.py` | Pegged product (Resin-like) | FV=10000, take at fair, post best±1, liquidation |
+| `template_random_walk.py` | Volatile product (Kelp-like) | Microprice regression + trade flow + directional posting |
+| `template_basket.py` | ETF basket arb | Z-score on spread (threshold=7, window=45), no component hedging |
+| `template_options.py` | Options/derivatives | Black-Scholes r=0, per-strike rolling IV mean, no delta hedge |
+| `template_conversion.py` | Cross-exchange arb | Implied bid/ask from observations, hidden taker bot detection |
+| `template_olivia.py` | Insider bot detection | qty=15 filter at daily min/max extremes, cross-product signal |
+| `refit_regression.py` | Utility | Auto-refit microprice regression: `python refit_regression.py <csv> <PRODUCT>` |
+
+**Round 1 deployment workflow:**
+1. Download sample data → `python refit_regression.py <prices.csv> KELP`
+2. Identify product archetypes from names/behavior
+3. Update template configs (FAIR_VALUE, COEFS, LIMIT, product names)
+4. Assemble final `trader.py` from templates
+5. Submit and iterate
+
+## File Organization (Round 0)
+
+```
+trader-logic/round-0/
+├── s3_carry.py, s25_training_only.py    # BEST strategies (2,857 / 2,855)
+├── s2_tradeflow.py, s2_speed_flat.py    # BASE strategies (2,851)
+├── god_mode_dp.py, god_logger.py        # Oracle/troll scripts
+├── best/, best_no_overfit/              # Copies + README with rankings
+├── diagnostics/                         # Bot reactivity + conversion tests
+├── infrastructure/                      # Feature eng, FK solver, datamodel, logger
+├── early_versions/                      # 22 pre-tradeflow strategies
+├── analysis/, strategy/                 # 7-module pipeline
+└── experiments/{wall_mid,l2_features,execution,pde_fk,asymmetric,misc}
+```
+
+## P3 vs P4 Data Comparison
+
+P3 Kelp/Resin data is **completely different** from P4 TOMATOES/EMERALDS:
+- Price levels: Kelp ~2,028 vs TOMATOES ~5,006
+- Spreads: Kelp 2.7 vs TOMATOES 13.0 (5x wider)
+- L1 volume: Kelp 21.9 vs TOMATOES 7.5 (3x smaller)
+- Only AC(1) ≈ -0.45 is shared (structural game engine property)
+- **Data-reuse exploit is DEAD** for P4
