@@ -8,6 +8,7 @@ __pycache__/
 
 *.zip
 run-logs/
+*tmp*.py
 
 # Distribution / packaging
 .Python
