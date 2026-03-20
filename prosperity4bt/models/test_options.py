@@ -13,6 +13,7 @@ class MatchMode(str, Enum):
     default = "default"   # Current >= crossing + market trade fallback
     imc = "imc"           # == exact matching, taker hits best bid/ask
     strict = "strict"     # == exact matching, no taker simulation
+    sim = "sim"           # Full agent-based sim: unified OrderBook + Poisson taker
 
 
 class TestOptions:
