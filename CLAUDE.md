@@ -211,6 +211,8 @@ NOT: IC × Position Size × Volatility − Transaction Costs
 |----------|-------|-----|
 | s3_carry | **2,857** | **BEST** — directional posting after large moves |
 | s25_training_only | **2,855** | Cross-validated, NOT overfit (single submission) |
+| god_mode_dp | 2,523 | DP-optimal trajectory (85 changes, spread-cost-aware) |
+| god_mode (naive) | 2,248 | Naive oracle (one-sided posting, too aggressive) |
 | s1_resting_optimized | **2,857** | 0 risk aversion for EMERALDS only |
 | s2_tradeflow | 2,851 | microprice reg + trade flow |
 | s2_speed_flat | 2,851 | same logic, 26% smaller |
