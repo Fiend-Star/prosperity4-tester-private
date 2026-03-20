@@ -2,7 +2,7 @@
 Grid Search: Sweep all tunable parameters across both training days.
 Pick parameters that are best on BOTH days (landscape stability).
 
-Run: python trader-logic/round-0/grid_search.py
+Run: python -u trader-logic/round-0/sweeps/grid_search.py
 """
 
 import subprocess
@@ -14,6 +14,7 @@ import tempfile
 
 BACKTESTER = "python -m prosperity4bt"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(BASE_DIR)))
 
 # Parameter grid
 PARAMS = {
@@ -108,7 +109,7 @@ def run_backtest(strategy_path, day):
     """Run backtester and return total PnL."""
     cmd = f'python -m prosperity4bt "{strategy_path}" 0-{day} --no-out --no-progress --ticks 2000 --iterations 1000'
     r = subprocess.run(cmd, capture_output=True, text=True, shell=True,
-                      cwd=os.path.dirname(os.path.dirname(BASE_DIR)))
+                      cwd=ROOT_DIR)
     m = re.search(r'Total profit: ([\d,]+)', r.stdout)
     if m:
         return int(m.group(1).replace(',', ''))

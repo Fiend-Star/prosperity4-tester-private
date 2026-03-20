@@ -11,14 +11,14 @@ Sweeps:
   S6: Posting & EMA (offset, EMA smoothing)              — 72 combos
   Total: ~476 combos × 2 days × ~1.5s = ~24 minutes
 
-Run: python trader-logic/round-0/mega_sweep.py
+Run: python -u trader-logic/round-0/sweeps/mega_sweep.py
 """
 
 import subprocess, re, json, os, sys, time, itertools, math
 from collections import Counter
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(os.path.dirname(BASE_DIR))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(BASE_DIR)))
 TMP = os.path.join(BASE_DIR, '_sweep_tmp.py')
 
 DEFAULTS = {
