@@ -160,11 +160,57 @@ class Trader:
 
 **Adverse selection by order size**: only 1.5% toxicity in tutorial. Not worth filtering.
 
-## Website Scores (Complete Record — 35+ submissions)
+## Strategy Component Forensics (from run 8587 log dissection)
+
+| Component | Mechanism (verified) | PnL Contribution |
+|-----------|---------------------|-----------------|
+| Best±1 posting | Queue priority over MM bot | Base fill rate (~2,518 baseline) |
+| Microprice 4-lag regression | Integer FV boundary selection (33/46 buys at +5.5-6.0 edge) | ~337 over baseline |
+| Trade flow (coef=1.5) | Diffuse posting shifts on 143 ticks; NOT from take decisions (zero marginal takes) | ~207 (mechanism invisible at trade level) |
+| Liquidation tracking | Force-fills during narrow spread (59/88 EMERALDS fills via this path) | ~120 EMERALDS |
+| Position aggression (pos>40) | Avoids wrong-side takes at high inventory | ~175 |
+| Directional posting (±3 after ±4 move) | Widens continuation side; structural mean reversion | ~6 |
+
+### PnL Decomposition (TOMATOES, run 8587)
+- **Spread capture:** 925 PnL from 126 matched units at 7.34 avg spread (51%)
+- **Inventory MTM:** 874 PnL from 73 units net long into rising end-of-day (49%)
+- Spread capture is the bankable component; inventory MTM is variance
+
+### EMERALDS Fill Paths (run 8587)
+- 59 fills at 10,000 (liquidation path during narrow-spread windows) — avg spread 0
+- 29 fills at 9,993/10,007 (±1 improvement path) — avg spread 14
+- Overall avg spread: 3.55 (liquidation dominates fill count)
+
+### Trade Flow Deep Dive
+- Zero marginal takes caused or prevented (FV shifted on only 2 of 80 fills)
+- 80 of 82 market_trades are our OWN fills — we intercept 98% of taker flow
+- Signal is a feedback loop reading our own trading history
+- Contrarian amplification: 66% of adjustments amplify position (not dampen)
+- The +207 likely from diffuse posting-quality shifts across 143 ticks (~1.5 PnL each)
+
+### Cross-Validation Result
+- s25_training_only (pure cross-val, averaged coefficients): **2,855** on website
+- s3_carry (35+ submission iterations): **2,857** on website
+- **Gap: 2 points — strategy is NOT overfit**
+- Regression coefficients [0.06, 0.12, 0.24, 0.58] are rock-stable across days (sum to ~1.0)
+- Intercept varies (4.2 vs 10.6) but RMSE identical — absorbed by coefficient sum
+
+### The Correct Framework for This Game
+```
+PnL = Fill Rate × Spread Captured − Inventory Risk
+NOT: IC × Position Size × Volatility − Transaction Costs
+```
+- Fill rate is exogenous (random taker bot, ~82 fills/2k ticks)
+- Signal IC does NOT affect fill rate — taker doesn't care about our quotes
+- Queue priority (best±1) is the dominant PnL driver
+- All signal-conditioned strategies (skewing, L2 features) score ≤2,851
+
+## Website Scores (Complete Record — 37+ submissions)
 
 | Strategy | Score | Key |
 |----------|-------|-----|
-| s3_carry | **2,857** | **BEST** — mean-reversion carry |
+| s3_carry | **2,857** | **BEST** — directional posting after large moves |
+| s25_training_only | **2,855** | Cross-validated, NOT overfit (single submission) |
 | s1_resting_optimized | **2,857** | 0 risk aversion for EMERALDS only |
 | s2_tradeflow | 2,851 | microprice reg + trade flow |
 | s2_speed_flat | 2,851 | same logic, 26% smaller |
@@ -206,7 +252,12 @@ class Trader:
 12. **Partial clearing still hurts** — even 25% at pos>30 (s18: 2,648)
 13. **Wall Mid posting cap hurts** — despite tracking hidden FV (s19: 2,676)
 14. **Ensemble FV dilutes signal** — averaging Wall Mid + simple mid + regression loses edge (s14: 2,640)
-15. **Tutorial ceiling is definitively 2,857** after 35+ submissions testing every angle
+15. **Tutorial ceiling is definitively 2,855-2,857** — confirmed NOT overfit (s25 cross-val = 2,855 vs s3 iterated = 2,857)
+16. **53% of TOMATOES PnL is inventory MTM** (end position × price move) — not systematic edge
+17. **Trade flow has zero marginal take impact** — +207 comes from diffuse posting shifts, not FV improvement
+18. **We intercept 98% of taker flow** — market_trades is mostly our own fills (feedback loop)
+19. **Taker bot is CONTRARIAN** — sells into rallies, buys into dips → gives us positive inventory PnL on average
+20. **Regression's real job is integer boundary selection** — shifts FV by 1 tick at critical moments, ~15-20 correct decisions/day
 
 ## Backtester Calibration
 
