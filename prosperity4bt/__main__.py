@@ -22,6 +22,7 @@ def run(
     vis: Annotated[bool, Option("--vis", help="Open backtest results in https://jmerle.github.io/imc-prosperity-3-visualizer/ when done.")] = False,
     original_timestamps: Annotated[bool, Option("--original-timestamps", help="Preserve original timestamps in output log rather than making them increase across days.")] = False,
     ticks: Annotated[Optional[int], Option("--ticks", help="Maximum number of ticks to simulate per day.")] = None,
+    iterations: Annotated[Optional[int], Option("--iterations", help="Number of times run() is called per day. Simulates test (1000) or final (10000) scoring cadence. Between calls, resting orders persist.")] = None,
 ):
     if out is not None and no_out:
         print("Error: --out and --no-out are mutually exclusive")
@@ -36,6 +37,7 @@ def run(
     options.show_visualizer = vis
     options.merge_timestamps = not original_timestamps
     options.max_ticks = ticks
+    options.iterations = iterations
 
     back_tester = BackTester(options)
     back_tester.run()
