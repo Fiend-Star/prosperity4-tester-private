@@ -160,7 +160,7 @@ class Trader:
 
 **Adverse selection by order size**: only 1.5% toxicity in tutorial. Not worth filtering.
 
-## Website Scores (Complete Record — 25+ submissions)
+## Website Scores (Complete Record — 35+ submissions)
 
 | Strategy | Score | Key |
 |----------|-------|-----|
@@ -182,6 +182,13 @@ class Trader:
 | diag_tight | 1,836 | tight posting = less edge, same fills |
 | s1_probes | 1,531 | probe orders TOXIC |
 | s3_tradeflow_nodrift | 1,465 | removing intercept = CATASTROPHIC |
+| s18_partial_clear | 2,648 | 25% clear at pos>30 HURTS |
+| s19_hybrid_fv | 2,676 | Wall Mid posting cap HURTS |
+| s15_adaptive_reg | 2,495 | online learning (not enough data 2k) |
+| s14_ensemble_fv | 2,640 | averaging FVs dilutes regression |
+| s11_replace_microprice | 1,936 | L2-weighted microprice CATASTROPHIC |
+| s6_dist_weighted | 2,640 | dist_weighted INTERFERES with flow |
+| s12_no_tradeflow_distw | 2,648 | no trade flow = back to baseline |
 
 ## Critical Lessons
 
@@ -195,6 +202,11 @@ class Trader:
 8. **FK/A-S optimal spread is useless** — 21-tick half-spread when MM quotes at 6.5
 9. **All signal additions to s2_tradeflow score exactly 2,851** — hard ceiling
 10. **The gap to 4,950 remains unexplained** — not from signals, features, speed, conversions, or bot reactivity
+11. **Local backtester is MISLEADING** — s19 was +92 locally but -175 on website; s11 was +1,084 locally but -915 on website
+12. **Partial clearing still hurts** — even 25% at pos>30 (s18: 2,648)
+13. **Wall Mid posting cap hurts** — despite tracking hidden FV (s19: 2,676)
+14. **Ensemble FV dilutes signal** — averaging Wall Mid + simple mid + regression loses edge (s14: 2,640)
+15. **Tutorial ceiling is definitively 2,857** after 35+ submissions testing every angle
 
 ## Backtester Calibration
 
