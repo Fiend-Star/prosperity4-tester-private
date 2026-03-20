@@ -9,6 +9,12 @@ class TradeMatchingMode(str, Enum):
     none = "none"
 
 
+class MatchMode(str, Enum):
+    default = "default"   # Current >= crossing + market trade fallback
+    imc = "imc"           # == exact matching, taker hits best bid/ask
+    strict = "strict"     # == exact matching, no taker simulation
+
+
 class TestOptions:
     def __init__(self, algorithm_path: Path, round_day: list[str], output_file: Path):
         self.algorithm_path = algorithm_path
@@ -23,6 +29,7 @@ class TestOptions:
         self.merge_timestamps = True
         self.max_ticks = None
         self.iterations = None  # None = call run() every tick; int = total run() calls per day
+        self.match_mode = MatchMode.default
 
 
 class RoundDayOption:

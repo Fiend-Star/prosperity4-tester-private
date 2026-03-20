@@ -3,7 +3,7 @@ from io import StringIO
 from IPython.utils.io import Tee
 from tqdm import tqdm
 from prosperity4bt.constants import LIMITS
-from prosperity4bt.models.test_options import TradeMatchingMode
+from prosperity4bt.models.test_options import TradeMatchingMode, MatchMode
 from prosperity4bt.tools.data_reader import BackDataReader
 from prosperity4bt.datamodel import TradingState, Observation, Symbol, Order, OrderDepth, Listing, ConversionObservation
 from prosperity4bt.tools.log_creator import ActivityLogCreator
@@ -15,7 +15,7 @@ from prosperity4bt.tools.order_match_maker import OrderMatchMaker
 
 class TestRunner:
 
-    def __init__(self, trader, data_reader: BackDataReader, round: int, day: int, show_progress_bar: bool=False, print_output: bool=False, trade_matching_mode=TradeMatchingMode.all, max_ticks: int=None, iterations: int=None):
+    def __init__(self, trader, data_reader: BackDataReader, round: int, day: int, show_progress_bar: bool=False, print_output: bool=False, trade_matching_mode=TradeMatchingMode.all, max_ticks: int=None, iterations: int=None, match_mode: MatchMode=MatchMode.default):
         self.trader = trader
         self.data_reader = data_reader
         self.round = round
@@ -25,6 +25,7 @@ class TestRunner:
         self.trade_matching_mode = trade_matching_mode
         self.max_ticks = max_ticks
         self.iterations = iterations  # None = call run() every tick
+        self.match_mode = match_mode
 
 
     def run(self):
@@ -187,6 +188,6 @@ class TestRunner:
 
 
     def __match_orders(self, state: TradingState, data: BacktestData, orders: dict[Symbol, list[Order]], result: BacktestResult) -> None:
-        match_maker = OrderMatchMaker(state, data, orders, self.trade_matching_mode)
+        match_maker = OrderMatchMaker(state, data, orders, self.trade_matching_mode, self.match_mode)
         matched_trades = match_maker.match()
         result.trades.extend(matched_trades)
