@@ -22,6 +22,7 @@ class TestOptions:
         self.show_visualizer = False
         self.merge_timestamps = True
         self.max_ticks = None
+        self.iterations = None  # None = call run() every tick; int = total run() calls per day
 
 
 class RoundDayOption:

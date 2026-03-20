@@ -15,7 +15,7 @@ from prosperity4bt.tools.order_match_maker import OrderMatchMaker
 
 class TestRunner:
 
-    def __init__(self, trader, data_reader: BackDataReader, round: int, day: int, show_progress_bar: bool=False, print_output: bool=False, trade_matching_mode=TradeMatchingMode.all, max_ticks: int=None):
+    def __init__(self, trader, data_reader: BackDataReader, round: int, day: int, show_progress_bar: bool=False, print_output: bool=False, trade_matching_mode=TradeMatchingMode.all, max_ticks: int=None, iterations: int=None):
         self.trader = trader
         self.data_reader = data_reader
         self.round = round
@@ -24,6 +24,7 @@ class TestRunner:
         self.print_output = print_output
         self.trade_matching_mode = trade_matching_mode
         self.max_ticks = max_ticks
+        self.iterations = iterations  # None = call run() every tick
 
 
     def run(self):
@@ -43,17 +44,49 @@ class TestRunner:
         timestamps = sorted(data.prices.keys())
         if self.max_ticks is not None:
             timestamps = timestamps[:self.max_ticks]
+
+        # Determine which ticks call run() vs just match resting orders
+        if self.iterations is not None and self.iterations < len(timestamps):
+            call_interval = max(1, len(timestamps) // self.iterations)
+            call_ticks = set(timestamps[i] for i in range(0, len(timestamps), call_interval))
+        else:
+            call_ticks = set(timestamps)  # call every tick (default)
+
+        resting_orders = {}  # orders that persist between run() calls
+
         timestamps_iterator = tqdm(timestamps, ascii=True) if self.show_progress_bar else timestamps
         for timestamp in timestamps_iterator:
             state = self.__initialize_trade_state(state, data, timestamp)
-            orders = self.__run_trader(state, result, timestamp)
 
-            # self.__validate_orders(orders)
+            if timestamp in call_ticks:
+                # CALL TICK: run the trader, get new orders
+                orders = self.__run_trader(state, result, timestamp)
+                resting_orders = self.__deep_copy_orders(orders)
+            else:
+                # RESTING TICK: use previous orders, still create sandbox log
+                orders = self.__rebuild_resting_orders(resting_orders, state)
+                sandbox_row = SandboxLogRow(timestamp=timestamp, sandbox_log="", lambda_log="")
+                result.sandbox_logs.append(sandbox_row)
+
             self.__create_activity_logs(state, data, result)
             self.__enforce_limits(state, data, orders, result.sandbox_logs[-1])
             self.__match_orders(state, data, orders, result)
 
         return result
+
+    def __deep_copy_orders(self, orders: dict) -> dict:
+        """Store a copy of orders for resting between run() calls."""
+        copy = {}
+        for product, order_list in orders.items():
+            copy[product] = [(o.symbol, o.price, o.quantity) for o in order_list]
+        return copy
+
+    def __rebuild_resting_orders(self, resting: dict, state: TradingState) -> dict:
+        """Rebuild Order objects from stored resting orders for matching."""
+        orders = {}
+        for product, order_tuples in resting.items():
+            orders[product] = [Order(sym, price, qty) for sym, price, qty in order_tuples]
+        return orders
 
     def __run_trader(self, state: TradingState, result: BacktestResult, timestamp: int) -> dict[Symbol, list[Order]]:
         stdout = StringIO()
