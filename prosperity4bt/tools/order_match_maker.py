@@ -18,6 +18,7 @@ TAKER_PARAMS = {
 }
 TICK_MS = 100
 
+
 # Distance-decay for taker fill probability
 # Wider quotes get hit less often: p_fill = exp(-TAKER_DECAY * spread_ticks)
 # k=0.007: spread=13 → p=0.91, spread=5 → p=0.97
@@ -125,6 +126,7 @@ class OrderMatchMaker:
             for order in self.orders.get(product, []):
                 new_trade = self.__match_order(order, market_trades.get(product, []))
                 new_trades.extend(new_trade)
+
 
             if len(new_trades) > 0:
                 self.state.own_trades[product] = new_trades
