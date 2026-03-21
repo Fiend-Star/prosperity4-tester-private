@@ -2,13 +2,13 @@ import json
 from datamodel import Order, TradingState
 
 """
-s30_sim_tuned: s25 with only HIGH-CONFIDENCE changes from sim Cartesian sweep.
+s30_sim_tuned: s25 + best params from CPU Cartesian WITH FLOW=1.5 locked.
 
 Changes from s25 (2,855 website):
-  1. EM_AGGRESSION=1 → EMERALDS takes at 9999/10001 when pos>40 (was 10000/10000)
-  2. FLOW_COEF=1.0 (was 1.5) — 100% in top 50 of sim sweep
-
-Everything else IDENTICAL to s25. Minimal risk of regression.
+  1. REG_LAGS=6 (was 4) — sim Cartesian #1 with flow=1.5
+  2. INTERCEPT=5.0 (was 7.39) — sim Cartesian #1 with flow=1.5
+  3. EM_AGGRESSION=1 (was 0) — 98% in top 50 across all sweeps
+  4. FLOW_COEF=1.5 KEPT (website proven +207)
 """
 
 class Trader:
@@ -83,12 +83,13 @@ class Trader:
                 mp = bb + (bv / (bv + av)) * (ba - bb) if (bv + av) > 0 else mid
 
                 c = self.tc
-                if len(c) >= 4: c = c[1:]
+                if len(c) >= 6: c = c[1:]
                 c.append(mp)
                 self.tc = c
 
-                if len(c) == 4:
-                    fv = 7.388073 + 0.059509*c[0] + 0.117116*c[1] + 0.243910*c[2] + 0.577988*c[3]
+                # lag=6, averaged intercept (cross-validated from both days)
+                if len(c) == 6:
+                    fv = 11.154728 + 0.029814*c[0] + 0.033008*c[1] + 0.067854*c[2] + 0.131580*c[3] + 0.246144*c[4] + 0.489368*c[5]
                 else:
                     fv = mp
 
@@ -100,8 +101,8 @@ class Trader:
                     self.tf.append(0.0)
                 if len(self.tf) > 5: self.tf = self.tf[-5:]
                 fs = max(-1.0, min(1.0, sum(self.tf) / 15.0))
-                # CHANGE: FLOW_COEF=1.0 (was 1.5)
-                fv -= fs * 1.0
+                # REVERTED: FLOW_COEF=1.5 (website proven +207, sim was wrong)
+                fv -= fs * 1.5
 
                 tv = round(fv)
 
@@ -118,6 +119,7 @@ class Trader:
                 tb = 80 - pos
                 ts = 80 + pos
 
+                # REVERTED: TOM_POS_THRESH=40 (website proven, sim was wrong)
                 mbp = tv - 1 if pos > 40 else tv
                 msp = tv + 1 if pos < -40 else tv
 

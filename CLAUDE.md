@@ -260,6 +260,7 @@ NOT: IC × Position Size × Volatility − Transaction Costs
 18. **We intercept 98% of taker flow** — market_trades is mostly our own fills (feedback loop)
 19. **Taker bot is CONTRARIAN** — sells into rallies, buys into dips → gives us positive inventory PnL on average
 20. **Regression's real job is integer boundary selection** — shifts FV by 1 tick at critical moments, ~15-20 correct decisions/day
+21. **CSV ≠ website data** — volumes differ 98.5%, prices differ 9.3% even with zero orders. Local backtester optimizes on a different market realization
 
 ## Backtester Calibration
 
@@ -268,6 +269,12 @@ NOT: IC × Position Size × Volatility − Transaction Costs
 - Calibrated day -1 gives 3,394 vs website 2,851 — gap from matching engine differences
 - Between run() calls, resting orders persist and can be matched by bots
 - Backtester uses STATIC book from CSV; website has dynamic bot interaction with our orders
+- **CSV data ≠ website data** — confirmed by comparing god_logger (zero orders) vs CSV day -1:
+  - Volumes differ on 98.5% of rows (different L1/L2 sizes)
+  - Prices differ on 9.3% of rows (371/4000 — different bid/ask levels, sometimes different depth)
+  - CSV day -2 is even more different (53% price mismatch vs website day -1)
+  - These differences exist even with ZERO orders placed → not caused by our book interaction
+  - Implication: local backtester trains/tests on different market data than the website evaluates on
 
 ## Strategy Architecture for Round 1+
 
@@ -301,6 +308,14 @@ Pre-built in `trader-logic/round-1/`:
 3. Update template configs (FAIR_VALUE, COEFS, LIMIT, product names)
 4. Assemble final `trader.py` from templates
 5. Submit and iterate
+
+**WARNING — CSV ≠ website data (confirmed Round 0):**
+- CSV volumes differ 98.5% from website; prices differ 9.3% even with zero orders
+- `refit_regression.py` fits coefficients to CSV data that the website WON'T use
+- Volume-dependent features (microprice, vol_imb, gap_asymmetry) see different inputs on website
+- **Round 1 strategy should prefer structural features** (spread states, mean-reversion, price levels) over volume-fitted features (L1/L2 imbalance, regression on microprice)
+- Treat CSV-fitted coefficients as a starting point, not ground truth — expect to iterate on website
+- Tutorial survived because s3/s25 rely on price structure, not volume specifics — new products may not be as forgiving
 
 ## File Organization (Round 0)
 
@@ -344,7 +359,7 @@ trader-logic/round-0/
 | `god_mode.py` | Naive oracle: one-sided posting from 50-tick lookahead | 2,248 |
 | `god_mode_dp.py` | DP backward induction: 322k states, spread-cost-aware | 2,523 |
 
-**Key finding:** Website market data is 100% deterministic — clean logger data matches trading-run data perfectly (0 differences across 4,000 rows). Our orders do NOT change the book. The DP oracle scores WORSE than our legit strategy because spread crossing costs exceed directional gains in a static-book simulation.
+**Key finding:** Website market data is 100% deterministic — clean logger data matches trading-run data perfectly (0 differences across 4,000 rows). Our orders do NOT change the book. The DP oracle scores WORSE than our legit strategy because spread crossing costs exceed directional gains in a static-book simulation. **However:** the website data does NOT match the CSV files used by the local backtester (98.5% volume mismatch, 9.3% price mismatch even with zero orders) — the CSV is a different realization of the same market.
 
 ## P3 vs P4 Data Comparison
 
