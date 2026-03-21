@@ -3,23 +3,51 @@
 This repository contains a Python-based backtester designed in preparation for the [IMC Prosperity 4 challenge](https://prosperity.imc.com/). 
 
 **Key Notes:**
-* **Origin:** This project is heavily based on [jmerle/imc-prosperity-3-backtester](https://github.com/jmerle/imc-prosperity-3-backtester), but it has been rewritten to utilize a more Object-Oriented Programming (OOP) style. 
+* **Origin:** This project is heavily based on [jmerle/imc-prosperity-3-backtester](https://github.com/jmerle/imc-prosperity-3-backtester), but it has been rewritten to utilize a more Object-Oriented Programming (OOP) style.
 * **Current Status:** The codebase is up to date with the Prosperity 4 tutorial round.
 * **License:** MIT License.
 
 ---
 
+## Backtester Calibration (2026-03-21)
+
+Three bugs were fixed that significantly improved backtester fidelity:
+1. **own_trades/market_trades stale persistence** — cleared between ticks
+2. **Resting order quantities not updated after partial fills** — re-snapshot after matching
+3. **Wrong iteration count** — website calls run() on every tick (confirmed from logs)
+
+**Calibration against 7 website submissions (day 0, run() every tick):**
+
+| Strategy | Website | Backtester | Gap |
+|----------|---------|------------|-----|
+| s3_carry | 2,857 | 2,626 | -8.1% |
+| s25_training_only | 2,855 | 2,684 | -6.0% |
+| s36_medallion | 2,896 | 2,626 | -9.3% |
+| s1_wallmid | 2,600 | 2,616 | +0.6% |
+| s15_adaptive_reg | 2,495 | 2,467 | -1.1% |
+
+EMERALDS gap = 0 across all runs. The 6-9% TOMATOES undershoot is structural (CSV doesn't capture taker fills against our inside-spread orders). Use the backtester for **relative ranking** (perfectly preserved), not absolute PnL prediction.
+
+---
+
 **Usage:**
-Basic usage:
 
-Run the backtester on an algorithm using all data from round 0
 ```bash
- $ python -m prosperity4bt <path to algorithm file> 0
- ```
+# Set PYTHONPATH
+$env:PYTHONPATH="<path to>\imc-prosperity-4-backtester\prosperity4bt"
 
-If you see: `No module named 'datamodel'`, set PYTHONPATH to the folder containing datamodel.py:  
-```bash
- $env:PYTHONPATH="<path to>\imc-prosperity-4-backtester\prosperity4bt"
+# Run on all days in a round (run() every tick = website behavior)
+python -m prosperity4bt <path to algorithm file> 0
+
+# Run specific day
+python -m prosperity4bt <path to algorithm file> 0--0 --ticks 2000
+
+# Key flags
+#   --ticks N                          max ticks to simulate
+#   --match-trades {all|worse|none}    trade matching mode (default: all)
+#   --no-out                           skip saving .log file
+#   --no-progress                      hide progress bars
+#   --print                            show trader stdout
 ```
 ---
 ## Overall Structure & How It Works
