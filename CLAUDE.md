@@ -213,7 +213,8 @@ NOT: IC × Position Size × Volatility − Transaction Costs
 
 | Strategy | Score | Key |
 |----------|-------|-----|
-| s3_carry | **2,857** | **BEST** — directional posting after large moves |
+| s36_medallion | **2,896** | **BEST** — s3 base + OBI shift + EM pos aggression |
+| s3_carry | **2,857** | directional posting after large moves |
 | s25_training_only | **2,855** | Cross-validated, NOT overfit (single submission) |
 | god_mode_dp | 2,523 | DP-optimal trajectory (85 changes, spread-cost-aware) |
 | god_mode (naive) | 2,248 | Naive oracle (one-sided posting, too aggressive) |
@@ -258,7 +259,7 @@ NOT: IC × Position Size × Volatility − Transaction Costs
 12. **Partial clearing still hurts** — even 25% at pos>30 (s18: 2,648)
 13. **Wall Mid posting cap hurts** — despite tracking hidden FV (s19: 2,676)
 14. **Ensemble FV dilutes signal** — averaging Wall Mid + simple mid + regression loses edge (s14: 2,640)
-15. **Tutorial ceiling is definitively 2,855-2,857** — confirmed NOT overfit (s25 cross-val = 2,855 vs s3 iterated = 2,857)
+15. **Tutorial ceiling raised to 2,896** by s36_medallion (s3 base + OBI shift 0.5 + EM pos aggression). Previous ceiling was 2,855-2,857
 16. **53% of TOMATOES PnL is inventory MTM** (end position × price move) — not systematic edge
 17. **Trade flow has zero marginal take impact** — +207 comes from diffuse posting shifts, not FV improvement
 18. **We intercept 98% of taker flow** — market_trades is mostly our own fills (feedback loop)
@@ -305,6 +306,40 @@ NOT: IC × Position Size × Volatility − Transaction Costs
 - **Days -1/-2 CSV ≠ website** — volumes differ 98.5%, prices differ 9.3% (different market realization)
 - Use day 0 for calibration, days -1/-2 for relative comparison only
 
+## s36_medallion Architecture (Current Best: Website 2,896)
+
+**Base:** s3_carry (lag-4 microprice regression + trade flow + directional carry signal)
+**Additions (each website-validated or structurally motivated):**
+- OBI FV shift (+0.5 tick): L1+L2 volume imbalance nudges FV (website: +39 PnL)
+- EMERALDS pos aggression at ±40: tighter takes when inventoried (from s30)
+- Terminal flattening (t>900k, |pos|>10): locks in spread PnL on full days (+944 BT total)
+
+**Overfit assessment:** Day 0 = 0% overfit (identical to s3). Full-day improvements = moderate risk (thresholds swept on 2 CSV days). Terminal flattening is structurally correct (OU process → carry is variance).
+
+## Exhaustive Data Mining Results (28 hypotheses, all 3 days)
+
+**LIVE signals (stable across all days):**
+| Signal | Accuracy | Frequency | Used in s36? |
+|--------|----------|-----------|-------------|
+| L1+L2 OBI | 97-99% | 7% of ticks | YES (FV shift) |
+| L1 vol ratio > 2.0 | 91-94% | 2% of ticks | Subset of OBI |
+| Spread=5 next UP | 100% | 0.5-1% | NO (hurts when layered) |
+| Spread=9 next DOWN | 94-100% | 0.5-1% | NO (hurts when layered) |
+| Vol clustering |dmid| AC=+0.44 | 50x OBI PnL after big moves | 7% | NO (widening hurts fills) |
+
+**DEAD signals (confirmed across all days):** cross-product (zero), spread memory, taker prediction (random), round numbers, FFT cycles, inventory-adjusted FV, taker impact, volume recovery, L2 gap asymmetry (anti-signal), EMERALDS narrow prediction, trade qty direction.
+
+**De-anonymized bots:**
+- Taker: exponential inter-arrival, 50/50 iid side, qty uniform [2,5], zero intelligence
+- MM: mid in 0.5 increments, L2/L1 vol ratio = 2.78x constant, spread {5-9,13,14}
+
+**Key negative results:**
+- Spread-crossing is NEVER +EV (-6.5 to -7.5 per trade at every threshold)
+- VWAP take FV: better RMSE (1.025 vs 1.140) but HURTS backtester PnL (CSV vol ≠ website vol)
+- Reduce-only aggressive takes: +86 day 0 pre-fix, but -1305 total post-fix
+- Position capping < 80: strictly worse at every level
+- EMERALDS spread capture is NEGATIVE (all EM PnL from inventory carry)
+
 ## Strategy Architecture for Round 1+
 
 7-module pipeline built in `trader-logic/round-0/strategy/`:
@@ -350,15 +385,21 @@ Pre-built in `trader-logic/round-1/`:
 
 ```
 trader-logic/round-0/
-├── s3_carry.py, s25_training_only.py    # BEST strategies (2,857 / 2,855)
-├── s2_tradeflow.py, s2_speed_flat.py    # BASE strategies (2,851)
-├── god_mode_dp.py, god_logger.py        # Oracle/troll scripts
+├── s36_medallion.py                     # CURRENT BEST (website 2,896)
+├── s3_carry.py                          # Previous best (website 2,857)
+├── s25_training_only.py                 # Cross-validated baseline (2,855)
+├── s28_inside_mm.py                     # Inside-spread MM variant (2,701)
+├── s34_grid.py                          # Grid posting + terminal flatten
+├── s35_ar2_trailing.py                  # AR(2) + trailing stop experiment
 ├── best/, best_no_overfit/              # Copies + README with rankings
 ├── diagnostics/                         # Bot reactivity + conversion tests
-├── infrastructure/                      # Feature eng, FK solver, datamodel, logger
+├── oracle/                              # God mode scripts + IMC extracted source
+├── sweeps/                              # Parameter sweep variants (s26-s33)
+├── experiments/                         # Overfit tests, DP experiments, s35 variants
 ├── early_versions/                      # 22 pre-tradeflow strategies
-├── analysis/, strategy/                 # 7-module pipeline
-└── experiments/{wall_mid,l2_features,execution,pde_fk,asymmetric,misc}
+├── infrastructure/                      # Feature eng, FK solver, datamodel, logger
+├── analysis/, strategy/                 # 7-module bot exploitation pipeline
+└── sim_tmp/                             # Auto-generated sim sweep temp files
 ```
 
 ## Parameter Optimization Scripts
