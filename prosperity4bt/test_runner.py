@@ -62,7 +62,6 @@ class TestRunner:
             if timestamp in call_ticks:
                 # CALL TICK: run the trader, get new orders
                 orders = self.__run_trader(state, result, timestamp)
-                resting_orders = self.__deep_copy_orders(orders)
             else:
                 # RESTING TICK: use previous orders, still create sandbox log
                 orders = self.__rebuild_resting_orders(resting_orders, state)
@@ -72,6 +71,12 @@ class TestRunner:
             self.__create_activity_logs(state, data, result)
             self.__enforce_limits(state, data, orders, result.sandbox_logs[-1])
             self.__match_orders(state, data, orders, result)
+
+            # Update resting orders with remaining quantities after fills
+            # (Order.quantity is mutated during matching — partial fills reduce it)
+            # Without this, resting orders on the next tick have the ORIGINAL qty,
+            # causing position limit violations and order rejection.
+            resting_orders = self.__deep_copy_orders(orders)
 
         return result
 
@@ -117,6 +122,10 @@ class TestRunner:
     def __initialize_trade_state(self, state: TradingState, data: BacktestData, timestamp: int) -> TradingState:
 
         state.timestamp = timestamp
+
+        # Clear previous tick's trades — wiki: "trades since last iteration"
+        state.own_trades = {}
+        state.market_trades = {}
 
         for product in data.products:
             order_depth = OrderDepth()
