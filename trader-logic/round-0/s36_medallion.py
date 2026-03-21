@@ -21,7 +21,7 @@ COEFS = [0.059694, 0.117270, 0.244154, 0.578440]
 INTERCEPT = 2.208667
 FLOW_COEF = 1.5
 FLOW_WINDOW = 5
-OBI_SHIFT = 0.0  # OBI is 98% accurate but too weak to flip integer FV rounding
+OBI_SHIFT = 0.5
 POS_AGGR_EM = 40
 LIMIT = 80
 
