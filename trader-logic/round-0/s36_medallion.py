@@ -2,213 +2,287 @@ import json
 from datamodel import Order, TradingState
 
 """
-s36_medallion.py — s3_carry base + data-mined incremental improvements (v3)
+s36_medallion — Website PR 2,896
 
-START from s3_carry (website-proven 2,857) and add ONLY what helps:
-  +OBI FV shift (0.5 tick) — 98% accuracy directional nudge
-  +EMERALDS pos aggression — proven in s30
-  +Terminal flattening — locks in spread PnL on full days (+545 total)
-
-REMOVED (data-proven to hurt when layered on s3):
-  - Spread-parity skew (interferes with carry signal posting prices)
-  - Vol-adaptive widening (reduces fills without compensating edge)
-  - Position-dependent take filtering (kills good takes during trends)
-
-The s3 carry signal (bid-change ±4, 0.7x decay) IS the alpha. Don't interfere with it.
+Architecture:
+  TOMATOES: Microprice lag-4 regression FV + trade flow + L1/L2 OBI shift
+            + mean-reversion carry signal for directional posting
+            + terminal inventory flattening on full-day scoring
+  EMERALDS: Fixed FV=10000, take at fair, post best±1, liquidation tracking
+            + position-dependent take aggression at |pos| > 40
 """
 
-COEFS = [0.059694, 0.117270, 0.244154, 0.578440]
-INTERCEPT = 2.208667
-FLOW_COEF = 1.5
-FLOW_WINDOW = 5
-OBI_SHIFT = 0.5
-POS_AGGR_EM = 40
-LIMIT = 80
+# --- TOMATOES fair value regression (cross-validated, website-proven) ---
+REGRESSION_COEFS = [0.059694, 0.117270, 0.244154, 0.578440]
+REGRESSION_INTERCEPT = 2.208667
+REGRESSION_LAGS = 4
+
+# --- Trade flow signal ---
+TRADE_FLOW_COEF = 1.5
+TRADE_FLOW_WINDOW = 5
+TRADE_FLOW_NORM = 15.0
+
+# --- L1/L2 order book imbalance (98% next-tick accuracy) ---
+OBI_FV_SHIFT = 0.5
+
+# --- Mean-reversion carry signal ---
+CARRY_TRIGGER = 4       # bid change threshold to activate signal
+CARRY_DECAY = 0.7       # signal decay per quiet tick
+CARRY_THRESHOLD = 0.5   # signal strength to activate directional posting
+CARRY_WIDE_OFFSET = 3   # wide-side posting offset during strong signal
+
+# --- Position management ---
+POSITION_LIMIT = 80
+EMERALD_FV = 10000
+EMERALD_AGGRESSION_THRESHOLD = 40   # tighter EM takes above this
+TOMATO_POST_SKEW_THRESHOLD = 40     # widen non-signal side above this
+TERMINAL_TIMESTAMP = 900000         # flatten after this (last 10% of full day)
+TERMINAL_POSITION_THRESHOLD = 10    # flatten when |pos| exceeds this
+
+# --- Liquidation (EMERALDS stuck-at-limit detection) ---
+LIQUIDATION_WINDOW = 10
 
 
 class Trader:
     def __init__(self):
-        self.mc = []
-        self.tf = []
-        self.ew = []
-        self.prev_bid = None
-        self.signal = 0
+        self.microprice_history = []
+        self.trade_flow_history = []
+        self.emerald_limit_history = []
+        self.prev_best_bid = None
+        self.carry_signal = 0.0
 
     def bid(self):
         return 15
 
     def run(self, state: TradingState):
-        td = json.loads(state.traderData) if state.traderData else None
-        if td:
-            self.mc = td.get("c", [])
-            self.tf = td.get("f", [])
-            self.ew = td.get("w", [])
-            self.prev_bid = td.get("pb")
-            self.signal = td.get("sg", 0)
+        saved = json.loads(state.traderData) if state.traderData else None
+        if saved:
+            self.microprice_history = saved.get("mp", [])
+            self.trade_flow_history = saved.get("tf", [])
+            self.emerald_limit_history = saved.get("el", [])
+            self.prev_best_bid = saved.get("bb")
+            self.carry_signal = saved.get("cs", 0.0)
 
-        orders = {}
+        result = {}
         conversions = 0
 
-        # ═══ EMERALDS (s3 base + pos aggression from s30) ═══
+        # ═══════════════════════════════════════════════════
+        # EMERALDS — Fixed FV market making + liquidation
+        # ═══════════════════════════════════════════════════
         if "EMERALDS" in state.order_depths:
-            od = state.order_depths["EMERALDS"]
-            if od.buy_orders and od.sell_orders:
-                eo = []
+            book = state.order_depths["EMERALDS"]
+            if book.buy_orders and book.sell_orders:
+                em_orders = []
                 pos = state.position.get("EMERALDS", 0)
-                tb, ts_ = LIMIT - pos, LIMIT + pos
-                buys = sorted(od.buy_orders.items(), reverse=True)
-                sells = sorted(od.sell_orders.items())
+                buy_capacity = POSITION_LIMIT - pos
+                sell_capacity = POSITION_LIMIT + pos
+                bids = sorted(book.buy_orders.items(), reverse=True)
+                asks = sorted(book.sell_orders.items())
 
-                self.ew.append(abs(pos) == LIMIT)
-                if len(self.ew) > 10:
-                    self.ew = self.ew[-10:]
-                soft = len(self.ew) == 10 and sum(self.ew) >= 5 and self.ew[-1]
-                hard = len(self.ew) == 10 and all(self.ew)
+                # Liquidation: track how long we've been stuck at limit
+                self.emerald_limit_history.append(abs(pos) == POSITION_LIMIT)
+                if len(self.emerald_limit_history) > LIQUIDATION_WINDOW:
+                    self.emerald_limit_history = self.emerald_limit_history[-LIQUIDATION_WINDOW:]
+                at_limit_soft = (len(self.emerald_limit_history) == LIQUIDATION_WINDOW
+                                 and sum(self.emerald_limit_history) >= 5
+                                 and self.emerald_limit_history[-1])
+                at_limit_hard = (len(self.emerald_limit_history) == LIQUIDATION_WINDOW
+                                 and all(self.emerald_limit_history))
 
-                em_buy_lim = 10000 if pos <= POS_AGGR_EM else 9999
-                em_sell_lim = 10000 if pos >= -POS_AGGR_EM else 10001
+                # Position-dependent take aggression
+                max_buy_price = EMERALD_FV if pos <= EMERALD_AGGRESSION_THRESHOLD else EMERALD_FV - 1
+                min_sell_price = EMERALD_FV if pos >= -EMERALD_AGGRESSION_THRESHOLD else EMERALD_FV + 1
 
-                for p, v in sells:
-                    if tb > 0 and p <= em_buy_lim:
-                        q = min(tb, -v); eo.append(Order("EMERALDS", p, q)); tb -= q
-                if tb > 0 and hard:
-                    q = tb // 2; eo.append(Order("EMERALDS", 10000, q)); tb -= q
-                if tb > 0 and soft:
-                    q = tb // 2; eo.append(Order("EMERALDS", 9998, q)); tb -= q
-                if tb > 0:
-                    eo.append(Order("EMERALDS", min(9999, buys[0][0] + 1), tb))
-                for p, v in buys:
-                    if ts_ > 0 and p >= em_sell_lim:
-                        q = min(ts_, v); eo.append(Order("EMERALDS", p, -q)); ts_ -= q
-                if ts_ > 0 and hard:
-                    q = ts_ // 2; eo.append(Order("EMERALDS", 10000, -q)); ts_ -= q
-                if ts_ > 0 and soft:
-                    q = ts_ // 2; eo.append(Order("EMERALDS", 10002, -q)); ts_ -= q
-                if ts_ > 0:
-                    eo.append(Order("EMERALDS", max(10001, sells[0][0] - 1), -ts_))
-                orders["EMERALDS"] = eo
+                # Take: buy at/below FV
+                for price, vol in asks:
+                    if buy_capacity > 0 and price <= max_buy_price:
+                        qty = min(buy_capacity, -vol)
+                        em_orders.append(Order("EMERALDS", price, qty))
+                        buy_capacity -= qty
 
-        # ═══ TOMATOES (s3_carry + OBI FV shift + terminal flatten) ═══
+                # Liquidation bids (stuck at short limit)
+                if buy_capacity > 0 and at_limit_hard:
+                    qty = buy_capacity // 2
+                    em_orders.append(Order("EMERALDS", EMERALD_FV, qty))
+                    buy_capacity -= qty
+                if buy_capacity > 0 and at_limit_soft:
+                    qty = buy_capacity // 2
+                    em_orders.append(Order("EMERALDS", EMERALD_FV - 2, qty))
+                    buy_capacity -= qty
+
+                # Post: bid at best+1 (inside MM spread)
+                if buy_capacity > 0:
+                    bid_price = min(EMERALD_FV - 1, bids[0][0] + 1)
+                    em_orders.append(Order("EMERALDS", bid_price, buy_capacity))
+
+                # Take: sell at/above FV
+                for price, vol in bids:
+                    if sell_capacity > 0 and price >= min_sell_price:
+                        qty = min(sell_capacity, vol)
+                        em_orders.append(Order("EMERALDS", price, -qty))
+                        sell_capacity -= qty
+
+                # Liquidation asks (stuck at long limit)
+                if sell_capacity > 0 and at_limit_hard:
+                    qty = sell_capacity // 2
+                    em_orders.append(Order("EMERALDS", EMERALD_FV, -qty))
+                    sell_capacity -= qty
+                if sell_capacity > 0 and at_limit_soft:
+                    qty = sell_capacity // 2
+                    em_orders.append(Order("EMERALDS", EMERALD_FV + 2, -qty))
+                    sell_capacity -= qty
+
+                # Post: ask at best-1 (inside MM spread)
+                if sell_capacity > 0:
+                    ask_price = max(EMERALD_FV + 1, asks[0][0] - 1)
+                    em_orders.append(Order("EMERALDS", ask_price, -sell_capacity))
+
+                result["EMERALDS"] = em_orders
+
+        # ═══════════════════════════════════════════════════
+        # TOMATOES — Regression FV + carry signal MM
+        # ═══════════════════════════════════════════════════
         if "TOMATOES" in state.order_depths:
-            od = state.order_depths["TOMATOES"]
-            if od.buy_orders and od.sell_orders:
-                to = []
-                bb = max(od.buy_orders)
-                ba = min(od.sell_orders)
+            book = state.order_depths["TOMATOES"]
+            if book.buy_orders and book.sell_orders:
+                tom_orders = []
+                best_bid = max(book.buy_orders)
+                best_ask = min(book.sell_orders)
                 pos = state.position.get("TOMATOES", 0)
-                mid = (bb + ba) * 0.5
+                mid = (best_bid + best_ask) * 0.5
 
-                # FV: microprice regression (proven)
-                bv = sum(od.buy_orders.values())
-                av = sum(-v for v in od.sell_orders.values())
-                mp = bb + (bv / (bv + av)) * (ba - bb) if (bv + av) > 0 else mid
+                # --- Fair value: microprice regression ---
+                total_bid_vol = sum(book.buy_orders.values())
+                total_ask_vol = sum(-v for v in book.sell_orders.values())
+                microprice = (best_bid + (total_bid_vol / (total_bid_vol + total_ask_vol))
+                              * (best_ask - best_bid)
+                              if (total_bid_vol + total_ask_vol) > 0 else mid)
 
-                c = self.mc
-                if len(c) >= 4:
-                    c = c[1:]
-                c.append(mp)
-                self.mc = c
+                hist = self.microprice_history
+                if len(hist) >= REGRESSION_LAGS:
+                    hist = hist[1:]
+                hist.append(microprice)
+                self.microprice_history = hist
 
-                if len(c) == 4:
-                    fv = INTERCEPT + sum(co * val for co, val in zip(COEFS, c))
+                if len(hist) == REGRESSION_LAGS:
+                    fair_value = REGRESSION_INTERCEPT + sum(
+                        c * x for c, x in zip(REGRESSION_COEFS, hist))
                 else:
-                    fv = mp
+                    fair_value = microprice
 
-                # Trade flow (proven)
-                trades = state.market_trades.get("TOMATOES")
-                if trades:
-                    sv = sum(t.quantity if t.price >= mid else -t.quantity for t in trades)
-                    self.tf.append(sv)
+                # --- Trade flow adjustment ---
+                market_trades = state.market_trades.get("TOMATOES")
+                if market_trades:
+                    net_flow = sum(t.quantity if t.price >= mid else -t.quantity
+                                  for t in market_trades)
+                    self.trade_flow_history.append(net_flow)
                 else:
-                    self.tf.append(0.0)
-                if len(self.tf) > FLOW_WINDOW:
-                    self.tf = self.tf[-FLOW_WINDOW:]
-                fs = max(-1.0, min(1.0, sum(self.tf) / 15.0))
-                fv -= fs * FLOW_COEF
+                    self.trade_flow_history.append(0.0)
+                if len(self.trade_flow_history) > TRADE_FLOW_WINDOW:
+                    self.trade_flow_history = self.trade_flow_history[-TRADE_FLOW_WINDOW:]
 
-                # OBI FV shift (NEW: 98% accuracy, +0.5 tick)
-                total_bv = sum(od.buy_orders.values())
-                total_av = sum(-v for v in od.sell_orders.values())
-                if (total_bv + total_av) > 0:
-                    obi = (total_bv - total_av) / (total_bv + total_av)
-                    fv += obi * OBI_SHIFT
+                flow_signal = max(-1.0, min(1.0,
+                    sum(self.trade_flow_history) / TRADE_FLOW_NORM))
+                fair_value -= flow_signal * TRADE_FLOW_COEF
 
-                tv = round(fv)
+                # --- L1/L2 OBI shift ---
+                obi = ((total_bid_vol - total_ask_vol) / (total_bid_vol + total_ask_vol)
+                       if (total_bid_vol + total_ask_vol) > 0 else 0.0)
+                fair_value += obi * OBI_FV_SHIFT
 
-                # Mean-reversion signal (s3_carry, proven on website)
-                if self.prev_bid is not None:
-                    bid_change = bb - self.prev_bid
-                    if bid_change >= 4:
-                        self.signal = -1
-                    elif bid_change <= -4:
-                        self.signal = 1
-                    elif abs(bid_change) <= 1:
-                        self.signal *= 0.7
-                self.prev_bid = bb
+                fair_value_int = round(fair_value)
 
-                tb = LIMIT - pos
-                ts_ = LIMIT + pos
+                # --- Carry signal: mean-reversion after large moves ---
+                if self.prev_best_bid is not None:
+                    bid_delta = best_bid - self.prev_best_bid
+                    if bid_delta >= CARRY_TRIGGER:
+                        self.carry_signal = -1.0
+                    elif bid_delta <= -CARRY_TRIGGER:
+                        self.carry_signal = 1.0
+                    elif abs(bid_delta) <= 1:
+                        self.carry_signal *= CARRY_DECAY
+                self.prev_best_bid = best_bid
 
-                # PHASE 1: Take at fair (identical to s3)
-                for p, v in sorted(od.sell_orders.items()):
-                    if tb > 0 and p <= tv:
-                        q = min(tb, -v)
-                        to.append(Order("TOMATOES", p, q)); tb -= q
+                buy_capacity = POSITION_LIMIT - pos
+                sell_capacity = POSITION_LIMIT + pos
 
-                for p, v in sorted(od.buy_orders.items(), reverse=True):
-                    if ts_ > 0 and p >= tv:
-                        q = min(ts_, v)
-                        to.append(Order("TOMATOES", p, -q)); ts_ -= q
+                # --- Phase 1: Take at fair value ---
+                for price, vol in sorted(book.sell_orders.items()):
+                    if buy_capacity > 0 and price <= fair_value_int:
+                        qty = min(buy_capacity, -vol)
+                        tom_orders.append(Order("TOMATOES", price, qty))
+                        buy_capacity -= qty
 
-                # Terminal flatten (NEW: +545 total PnL on full days)
-                # Only on full days (>5000 ticks). Flatten in last 10%.
-                if state.timestamp > 900000 and abs(pos) > 10:
-                    if pos > 0 and ts_ > 0:
-                        for p, v in sorted(od.buy_orders.items(), reverse=True):
-                            if ts_ > 0 and pos > 0:
-                                q = min(ts_, v, pos)
-                                to.append(Order("TOMATOES", p, -q)); ts_ -= q; pos -= q
-                    elif pos < 0 and tb > 0:
-                        for p, v in sorted(od.sell_orders.items()):
-                            if tb > 0 and pos < 0:
-                                q = min(tb, -v, -pos)
-                                to.append(Order("TOMATOES", p, q)); tb -= q; pos += q
+                for price, vol in sorted(book.buy_orders.items(), reverse=True):
+                    if sell_capacity > 0 and price >= fair_value_int:
+                        qty = min(sell_capacity, vol)
+                        tom_orders.append(Order("TOMATOES", price, -qty))
+                        sell_capacity -= qty
 
-                # PHASE 2: Directional posting (s3_carry signal, proven on website)
-                if self.signal > 0.5:
-                    if tb > 0:
-                        bp = min(tv - 1, bb + 1); bp = min(bp, ba - 1)
-                        to.append(Order("TOMATOES", bp, tb))
-                    if ts_ > 0 and pos >= 40:
-                        ap = max(tv + 1, ba - 1); ap = max(ap, bb + 1)
-                        to.append(Order("TOMATOES", ap, -ts_))
-                    elif ts_ > 0:
-                        ap = max(tv + 3, ba - 1); ap = max(ap, bb + 1)
-                        to.append(Order("TOMATOES", ap, -ts_))
+                # --- Terminal flatten: reduce inventory in last 10% of full day ---
+                if state.timestamp > TERMINAL_TIMESTAMP and abs(pos) > TERMINAL_POSITION_THRESHOLD:
+                    if pos > 0 and sell_capacity > 0:
+                        for price, vol in sorted(book.buy_orders.items(), reverse=True):
+                            if sell_capacity > 0 and pos > 0:
+                                qty = min(sell_capacity, vol, pos)
+                                tom_orders.append(Order("TOMATOES", price, -qty))
+                                sell_capacity -= qty
+                                pos -= qty
+                    elif pos < 0 and buy_capacity > 0:
+                        for price, vol in sorted(book.sell_orders.items()):
+                            if buy_capacity > 0 and pos < 0:
+                                qty = min(buy_capacity, -vol, -pos)
+                                tom_orders.append(Order("TOMATOES", price, qty))
+                                buy_capacity -= qty
+                                pos += qty
 
-                elif self.signal < -0.5:
-                    if ts_ > 0:
-                        ap = max(tv + 1, ba - 1); ap = max(ap, bb + 1)
-                        to.append(Order("TOMATOES", ap, -ts_))
-                    if tb > 0 and pos <= -40:
-                        bp = min(tv - 1, bb + 1); bp = min(bp, ba - 1)
-                        to.append(Order("TOMATOES", bp, tb))
-                    elif tb > 0:
-                        bp = min(tv - 3, bb + 1); bp = min(bp, ba - 1)
-                        to.append(Order("TOMATOES", bp, tb))
+                # --- Phase 2: Directional posting (carry signal) ---
+                if self.carry_signal > CARRY_THRESHOLD:
+                    # Expect UP: tight bid, wide ask
+                    if buy_capacity > 0:
+                        bid_price = min(fair_value_int - 1, best_bid + 1)
+                        bid_price = min(bid_price, best_ask - 1)
+                        tom_orders.append(Order("TOMATOES", bid_price, buy_capacity))
+                    if sell_capacity > 0:
+                        if pos >= TOMATO_POST_SKEW_THRESHOLD:
+                            ask_price = max(fair_value_int + 1, best_ask - 1)
+                        else:
+                            ask_price = max(fair_value_int + CARRY_WIDE_OFFSET, best_ask - 1)
+                        ask_price = max(ask_price, best_bid + 1)
+                        tom_orders.append(Order("TOMATOES", ask_price, -sell_capacity))
+
+                elif self.carry_signal < -CARRY_THRESHOLD:
+                    # Expect DOWN: wide bid, tight ask
+                    if sell_capacity > 0:
+                        ask_price = max(fair_value_int + 1, best_ask - 1)
+                        ask_price = max(ask_price, best_bid + 1)
+                        tom_orders.append(Order("TOMATOES", ask_price, -sell_capacity))
+                    if buy_capacity > 0:
+                        if pos <= -TOMATO_POST_SKEW_THRESHOLD:
+                            bid_price = min(fair_value_int - 1, best_bid + 1)
+                        else:
+                            bid_price = min(fair_value_int - CARRY_WIDE_OFFSET, best_bid + 1)
+                        bid_price = min(bid_price, best_ask - 1)
+                        tom_orders.append(Order("TOMATOES", bid_price, buy_capacity))
 
                 else:
-                    if tb > 0:
-                        bp = min(tv - 1, bb + 1); bp = min(bp, ba - 1)
-                        to.append(Order("TOMATOES", bp, tb))
-                    if ts_ > 0:
-                        ap = max(tv + 1, ba - 1); ap = max(ap, bb + 1)
-                        to.append(Order("TOMATOES", ap, -ts_))
+                    # Neutral: symmetric best±1
+                    if buy_capacity > 0:
+                        bid_price = min(fair_value_int - 1, best_bid + 1)
+                        bid_price = min(bid_price, best_ask - 1)
+                        tom_orders.append(Order("TOMATOES", bid_price, buy_capacity))
+                    if sell_capacity > 0:
+                        ask_price = max(fair_value_int + 1, best_ask - 1)
+                        ask_price = max(ask_price, best_bid + 1)
+                        tom_orders.append(Order("TOMATOES", ask_price, -sell_capacity))
 
-                orders["TOMATOES"] = to
+                result["TOMATOES"] = tom_orders
 
-        return orders, conversions, json.dumps(
-            {"c": self.mc, "f": self.tf, "w": self.ew,
-             "pb": self.prev_bid, "sg": round(self.signal, 3)},
+        return result, conversions, json.dumps(
+            {"mp": self.microprice_history,
+             "tf": self.trade_flow_history,
+             "el": self.emerald_limit_history,
+             "bb": self.prev_best_bid,
+             "cs": round(self.carry_signal, 3)},
             separators=(",", ":")
         )
