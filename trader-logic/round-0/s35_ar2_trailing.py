@@ -2,12 +2,13 @@ import json
 from datamodel import Order, TradingState
 
 """
-s35_ar2_trailing.py — AR(2) Mean-Reversion MM + Trailing Stop Skew
+s35_ar2_trailing.py — AR(2) Mean-Reversion MM + Trailing Stop Skew (both products)
 
 TOMATOES: +-3 spread, full capacity
   FV = blend of AR(2)-corrected EMA (50%), VWAP (30%), OBI shift (20%)
   AR(2): phi1=-0.44, phi2=-0.20 (calibrated from lag-1 AC=-0.44)
   EMA alpha=0.3 smooths AR(2) prediction
+  Trailing stop: track PnL high-water mark, skew quotes on drawdown
 
 EMERALDS: +-7 from FV=10000, full capacity
   Trailing stop PnL management: track peak PnL, ramp skew on drawdowns
@@ -35,12 +36,17 @@ LIMIT = 80
 
 class Trader:
     def __init__(self):
-        self.mids = []       # TOMATOES mid history [lag2, lag1]
+        self.mids = []       # TOMATOES mid history for AR(2)
         self.ema = None      # EMA of AR(2) prediction
         self.vwap_buf = []   # [(price, qty), ...] for rolling VWAP
-        self.em_rpnl = 0.0   # EMERALDS realized PnL
-        self.em_peak = 0.0   # EMERALDS peak total PnL (high-water mark)
-        self.em_last_pos = 0 # last known EMERALDS position
+        # TOMATOES trailing stop state
+        self.tom_cash = 0.0
+        self.tom_peak = 0.0
+        self.tom_last_pos = 0
+        # EMERALDS trailing stop state
+        self.em_cash = 0.0
+        self.em_peak = 0.0
+        self.em_last_pos = 0
 
     def bid(self):
         return 15
@@ -51,7 +57,10 @@ class Trader:
             self.mids = td.get("m", [])
             self.ema = td.get("e")
             self.vwap_buf = td.get("vt", [])
-            self.em_rpnl = td.get("ep", 0.0)
+            self.tom_cash = td.get("tc", 0.0)
+            self.tom_peak = td.get("tp", 0.0)
+            self.tom_last_pos = td.get("tl", 0)
+            self.em_cash = td.get("ec", 0.0)
             self.em_peak = td.get("pk", 0.0)
             self.em_last_pos = td.get("lp", 0)
 
@@ -59,7 +68,7 @@ class Trader:
         conversions = 0
 
         # ════════════════════════════════════════════
-        # TOMATOES — AR(2) + VWAP + OBI blended FV, ±3 MM
+        # TOMATOES — AR(2) + VWAP + OBI blended FV, ±3 MM + trailing stop
         # ════════════════════════════════════════════
         if "TOMATOES" in state.order_depths:
             od = state.order_depths["TOMATOES"]
@@ -69,6 +78,14 @@ class Trader:
                 ba = min(od.sell_orders)
                 mid = (bb + ba) * 0.5
                 pos = state.position.get("TOMATOES", 0)
+
+                # ── Track TOMATOES PnL via position changes ──
+                pd = pos - self.tom_last_pos
+                if pd != 0:
+                    self.tom_cash -= pd * mid
+                tom_pnl = self.tom_cash + pos * mid
+                self.tom_peak = max(self.tom_peak, tom_pnl)
+                tom_dd = max(0.0, self.tom_peak - tom_pnl)
 
                 # ── 1. AR(2) corrected EMA ──
                 self.mids.append(mid)
@@ -131,17 +148,37 @@ class Trader:
                         to.append(Order("TOMATOES", p, -q))
                         ts -= q
 
-                # Phase 2: Post at ±3 from FV, full remaining capacity
+                # ── Drawdown-based quote skew for TOMATOES ──
+                # Only skew when BOTH in drawdown AND holding significant position
+                # This avoids killing profitable carry while cutting losses
+                t_skew = 0
+                if tom_dd > 100 and abs(pos) > 30:
+                    t_skew = 1
+                if tom_dd > 250 and abs(pos) > 30:
+                    t_skew = 2
+
+                if pos > 0:
+                    bid_half = HALF_SPREAD_T + t_skew
+                    ask_half = max(1, HALF_SPREAD_T - t_skew)
+                elif pos < 0:
+                    bid_half = max(1, HALF_SPREAD_T - t_skew)
+                    ask_half = HALF_SPREAD_T + t_skew
+                else:
+                    bid_half = HALF_SPREAD_T
+                    ask_half = HALF_SPREAD_T
+
+                # Phase 2: Post at ±spread from FV, full remaining capacity
                 if tb > 0:
-                    bid_price = tv - HALF_SPREAD_T
-                    bid_price = min(bid_price, ba - 1)  # never cross the spread
+                    bid_price = tv - bid_half
+                    bid_price = min(bid_price, ba - 1)
                     to.append(Order("TOMATOES", bid_price, tb))
                 if ts > 0:
-                    ask_price = tv + HALF_SPREAD_T
+                    ask_price = tv + ask_half
                     ask_price = max(ask_price, bb + 1)
                     to.append(Order("TOMATOES", ask_price, -ts))
 
                 orders["TOMATOES"] = to
+                self.tom_last_pos = pos
 
         # ════════════════════════════════════════════
         # EMERALDS — Fixed FV ±7, trailing stop skew
@@ -155,17 +192,11 @@ class Trader:
                 mid = (bb + ba) * 0.5
                 pos = state.position.get("EMERALDS", 0)
 
-                # ── Track realized PnL from own trades ──
-                own = state.own_trades.get("EMERALDS", [])
-                for t in own:
-                    if t.buyer == "SUBMISSION":
-                        self.em_rpnl -= t.price * t.quantity   # bought: cash out
-                    elif t.seller == "SUBMISSION":
-                        self.em_rpnl += t.price * t.quantity   # sold: cash in
-
-                # ── Total PnL = realized + mark-to-market ──
-                unrealized = pos * (mid - FV_EM)
-                total_pnl = self.em_rpnl + unrealized
+                # ── Track PnL via position changes ──
+                pos_delta = pos - self.em_last_pos
+                if pos_delta != 0:
+                    self.em_cash -= pos_delta * mid
+                total_pnl = self.em_cash + pos * mid
                 self.em_peak = max(self.em_peak, total_pnl)
                 drawdown = max(0.0, self.em_peak - total_pnl)
 
@@ -184,19 +215,16 @@ class Trader:
                     aggressive_flatten = True
 
                 # ── Compute skewed quotes ──
-                # If long and drawdown: tighten ask, widen bid → encourages selling
-                # If short and drawdown: tighten bid, widen ask → encourages buying
                 if pos > 0:
-                    bid_offset = HALF_SPREAD_E + skew   # widen bid (less eager to buy more)
-                    ask_offset = HALF_SPREAD_E - skew   # tighten ask (more eager to sell)
+                    bid_offset = HALF_SPREAD_E + skew
+                    ask_offset = HALF_SPREAD_E - skew
                 elif pos < 0:
-                    bid_offset = HALF_SPREAD_E - skew   # tighten bid (more eager to buy)
-                    ask_offset = HALF_SPREAD_E + skew   # widen ask (less eager to sell more)
+                    bid_offset = HALF_SPREAD_E - skew
+                    ask_offset = HALF_SPREAD_E + skew
                 else:
                     bid_offset = HALF_SPREAD_E
                     ask_offset = HALF_SPREAD_E
 
-                # Floor: never let offset go below 1 (never cross FV)
                 bid_offset = max(1, bid_offset)
                 ask_offset = max(1, ask_offset)
 
@@ -218,7 +246,6 @@ class Trader:
                 # Phase 1.5: Aggressive flatten during severe drawdown
                 if aggressive_flatten and abs(pos) > 20:
                     if pos > 0 and ts > 0:
-                        # Hit best bid to flatten
                         for p, v in sorted(od.buy_orders.items(), reverse=True):
                             if ts > 0 and p >= FV_EM - 2:
                                 q = min(ts, v, pos)
@@ -249,7 +276,10 @@ class Trader:
                 "m": self.mids,
                 "e": self.ema,
                 "vt": self.vwap_buf,
-                "ep": round(self.em_rpnl, 2),
+                "tc": round(self.tom_cash, 2),
+                "tp": round(self.tom_peak, 2),
+                "tl": self.tom_last_pos,
+                "ec": round(self.em_cash, 2),
                 "pk": round(self.em_peak, 2),
                 "lp": self.em_last_pos,
             },
