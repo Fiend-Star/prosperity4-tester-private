@@ -18,15 +18,6 @@ TAKER_PARAMS = {
 }
 TICK_MS = 100
 
-# Synthetic taker fill parameters for default mode.
-# Only active when strategies post INSIDE the MM spread (best±1).
-# CSV misses ~12 TOM taker arrivals that only trade because our order
-# provides a better price than the MM bot. EMERALDS is already exact.
-# Disabled by default — enable via TAKER_FILL_ENABLED = True.
-TAKER_FILL_ENABLED = False
-TAKER_FILL_PARAMS = {
-    "TOMATOES": {"p_extra": 0.006, "qty_range": (2, 5)},
-}
 
 # Distance-decay for taker fill probability
 # Wider quotes get hit less often: p_fill = exp(-TAKER_DECAY * spread_ticks)
@@ -136,42 +127,6 @@ class OrderMatchMaker:
                 new_trade = self.__match_order(order, market_trades.get(product, []))
                 new_trades.extend(new_trade)
 
-            # Synthetic taker fills: CSV misses taker arrivals that only trade
-            # because our orders provide better prices. Model as inter-arrival
-            # times: track time since last taker (CSV or synthetic), sample
-            # next arrival from exponential(cadence). Only fill if our order
-            # is inside the MM spread (price improvement over MM best).
-            # Synthetic taker fills for arrivals not captured in CSV.
-            # Only fires when our order is strictly INSIDE the MM spread.
-            if (TAKER_FILL_ENABLED and product in TAKER_FILL_PARAMS
-                    and not market_trades.get(product)):
-                params = TAKER_FILL_PARAMS[product]
-                if random.random() < params["p_extra"]:
-                    od = self.state.order_depths.get(product)
-                    if od and od.buy_orders and od.sell_orders:
-                        mm_bb = max(od.buy_orders)
-                        mm_ba = min(od.sell_orders)
-                        taker_sells = random.random() < 0.5
-                        lo, hi = params["qty_range"]
-                        taker_qty = random.randint(lo, hi)
-                        for order in self.orders.get(product, []):
-                            if taker_qty <= 0:
-                                break
-                            # Strictly inside: price must improve on MM by ≥1
-                            if (taker_sells and order.quantity > 0
-                                    and order.price > mm_bb
-                                    and order.price < mm_ba):
-                                vol = min(order.quantity, taker_qty)
-                                new_trades.append(self.__create_buy_order(
-                                    order, vol, order.price, "TAKER_SYN"))
-                                taker_qty -= vol
-                            elif (not taker_sells and order.quantity < 0
-                                      and order.price < mm_ba
-                                      and order.price > mm_bb):
-                                vol = min(abs(order.quantity), taker_qty)
-                                new_trades.append(self.__create_sell_order(
-                                    order, vol, order.price, "TAKER_SYN"))
-                                taker_qty -= vol
 
             if len(new_trades) > 0:
                 self.state.own_trades[product] = new_trades
