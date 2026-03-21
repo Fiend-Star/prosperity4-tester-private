@@ -287,11 +287,13 @@ NOT: IC × Position Size × Volatility − Transaction Costs
 - **TOMATOES undershoots by ~170** — from ~12 taker bot fills that only exist on the website (taker hits our resting bid/ask at best±1, creating fills not in the CSV)
 - **Strategies not relying on taker interception (s1_wallmid, s15) match within 1%**
 
-### Remaining 6-9% Gap: Root Cause
-- CSV records a market WITHOUT our orders. Taker bots that would hit our resting quotes instead trade with the MM bot (or don't trade at all) → those fills don't appear in the CSV
-- Website has 170 fills for s25: 100 from CSV market trade timestamps (taker arrivals we intercept) + 58 EMERALDS narrow-spread takes at 10000 + 12 TOMATOES taker fills not in CSV
-- The 12 missing TOMATOES fills can only be recovered via SIM mode (Poisson taker generation)
-- CSV day 0 order books match website 100% (0 differences across 4000 comparisons) — the book data is perfect, only the trade generation is missing
+### Remaining 6-9% Gap: Root Cause (for inside-spread strategies only)
+- CSV records a market WITHOUT our orders. ~12 TOMATOES taker arrivals that only trade on the website (because our best±1 order provides a better price) don't appear in CSV
+- Website has 170 fills for s25: 100 from CSV market trade timestamps + 58 EMERALDS narrow-spread takes at 10000 + 12 TOMATOES taker fills not in CSV
+- **EMERALDS is exactly correct** (EM gap = 0 across all 7 tested runs). The gap is 100% TOMATOES
+- Strategies posting AT the MM spread (s1_wallmid, s15, s28) are already within ±2% because they don't intercept taker flow
+- CSV day 0 order books match website 100% (0 differences across 4000 comparisons) — book data is perfect, only trade generation is missing
+- Synthetic taker fill generation is available (`TAKER_FILL_ENABLED = True` in `order_match_maker.py`) but disabled by default — it helps inside-spread strategies (~+6%) while hurting at-spread strategies (~-15%). No single `p_extra` fits all strategies
 
 ### CSV vs Website Data
 - **Day 0 CSV matches website order books 100%** (confirmed by comparing run 8587 activitiesLog vs CSV — 0 differences across 4000 rows)
