@@ -37,7 +37,7 @@ EMERALD_FV = 10000
 EMERALD_AGGRESSION_THRESHOLD = 40   # tighter EM takes above this
 TOMATO_POST_SKEW_THRESHOLD = 40     # widen non-signal side above this
 TERMINAL_TIMESTAMP = 900000         # flatten after this (last 10% of full day)
-TERMINAL_POSITION_THRESHOLD = 10    # flatten when |pos| exceeds this
+TERMINAL_POSITION_THRESHOLD = 28    # flatten when |pos| exceeds this (decimal sweep optimal)
 
 # --- Liquidation (EMERALDS stuck-at-limit detection) ---
 LIQUIDATION_WINDOW = 10
