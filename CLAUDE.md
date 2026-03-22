@@ -301,6 +301,16 @@ NOT: IC × Position Size × Volatility − Transaction Costs
 - The gap is **irreducible with CSV-replay**. Would require per-tick agent-based simulation (SIM mode) which introduces its own calibration problems
 - CSV day 0 order books match website 100% (0 diffs across 4000 rows) — book data is perfect
 
+### SIM Mode Calibration Fix (2026-03-22)
+- `--match-mode sim` generates Poisson taker arrivals at each tick using `TAKER_PARAMS` cadences
+- **Bug found**: TOMATOES `cadence_ms` was set to 1300ms → 154 expected arrivals per 2000-tick run
+- **Actual website rate**: ~82 TOMATOES takers/run (70 CSV + ~12 extra) → correct cadence = 2440ms
+- **Fix applied**: changed `TOMATOES cadence_ms 1300 → 2440` in `prosperity4bt/tools/order_match_maker.py`
+- EMERALDS was already correctly calibrated at 7000ms (≈29 arrivals, matches CSV, gap=0)
+- After fix: SIM mode gives s3_carry ≈ 2,600–2,900 (centered near website 2,857); was 3,600–3,800 (34% overshot)
+- SIM mode is still stochastic — run 5+ times and average for a reliable estimate
+- `calibration_results.json` is STALE (was computed with `--iterations 1000`, the old wrong setting)
+
 ### CSV vs Website Data
 - **Day 0 CSV = website order books** (100% match confirmed, run 8587)
 - **Days -1/-2 CSV ≠ website** — volumes differ 98.5%, prices differ 9.3% (different market realization)

@@ -1,4 +1,5 @@
 {
+  "_warning": "STALE - generated with --iterations 1000 --ticks 2000 (old buggy setting). Bug fixes (2026-03-21) removed stale own_trades persistence, fixed resting qty update after partial fills, and confirmed website calls run() every tick (no --iterations flag needed). Re-run calibrate_backtester.py without --iterations to regenerate. With current code: s3_carry default=2626 (+8% gap), s25=2684 (+6% gap). SIM mode cadence fixed: TOMATOES 1300ms\u21922440ms (was 2.2x over-estimating taker arrivals).",
   "default": {
     "pearson": 0.39532195809548887,
     "spearman": 0.7714285714285715,

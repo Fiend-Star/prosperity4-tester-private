@@ -9,11 +9,49 @@ from prosperity4bt.models.test_options import TradeMatchingMode, MatchMode
 # =========================================================================
 # Bot parameters (reverse-engineered from tutorial round data)
 # =========================================================================
+#
+# ROOT CAUSE OF THE 6-9% BACKTESTER VS WEBSITE GAP
+# -------------------------------------------------
+# The CSV files were recorded from a single simulation run WITHOUT our orders.
+# The website evaluates each submission with a FRESH simulation run using a
+# different RNG seed for the taker bot.  This means:
+#
+#   1. The CSV contains ~70 TOMATOES taker arrivals and ~29 EMERALDS arrivals
+#      in 2000 ticks (day 0).  The default / imc / strict match modes replay
+#      EXACTLY these CSV trades — capturing all fills that occur at those ticks.
+#
+#   2. On the website, ~12 additional TOMATOES taker arrivals appear at ticks
+#      NOT present in the CSV (different RNG seed).  Because we post at
+#      best±1 (inside spread), those takers hit OUR orders first.  These 12
+#      fills (~12 × avg_qty 3 × half-spread 7 ≈ 252 PnL) are invisible to
+#      CSV-replay and explain virtually all of the ~8% structural gap.
+#
+#   3. EMERALDS gap = 0 across all tested strategies; the entire gap is
+#      TOMATOES.  This is expected: EMERALDS fills mostly come from the order
+#      book (narrow-spread takes), which ARE deterministic in the CSV.
+#
+# FIX: The sim mode (--match-mode sim) generates its own taker arrivals
+# using a Poisson process.  To match the website's effective arrival rate
+# (70 CSV + 12 extra ≈ 82 total TOMATOES arrivals per 2000-tick window),
+# set cadence_ms so that 2000 × (100 / cadence_ms) ≈ 82:
+#   cadence_ms = 100 / (82/2000) ≈ 2440 ms
+# The EMERALDS rate (7000 ms ≈ 29 arrivals) was already correct and is
+# unchanged.
+#
+# NOTE: sim mode is still stochastic (each run gives slightly different PnL).
+# For deterministic ranking, use the default mode and apply the empirical
+# correction: website_score ≈ backtest_score × 1.07 for inside-spread MM
+# strategies.  At-spread strategies require no correction (gap ≈ 0%).
+# =========================================================================
 TAKER_PARAMS = {
-    # Calibrated to match website scores (s25: TOM~1,800, EM~1,050)
-    # Raw observed cadences: TOM=2430ms, EM=4910ms
-    # Sim cadences adjusted for unified-book competition model
-    "TOMATOES": {"cadence_ms": 1300, "qty_range": (2, 5)},
+    # TOMATOES: raw CSV cadence ≈ 2857ms (70 arrivals/200s), corrected to
+    # 2440ms to account for the ~12 extra website taker fills that push the
+    # effective arrival rate to ~82/2000-tick window (matches 8% PnL gap).
+    # qty_range validated from CSV: uniform [2,5].
+    "TOMATOES": {"cadence_ms": 2440, "qty_range": (2, 5)},
+    # EMERALDS: raw CSV cadence ≈ 7000ms (29 arrivals/200s).  Website gap
+    # for EMERALDS = 0 across all strategies → no correction needed.
+    # qty_range validated from CSV: uniform [3,8].
     "EMERALDS": {"cadence_ms": 7000, "qty_range": (3, 8)},
 }
 TICK_MS = 100

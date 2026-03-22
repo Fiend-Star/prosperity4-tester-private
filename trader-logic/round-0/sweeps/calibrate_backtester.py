@@ -30,11 +30,14 @@ NEEDS_PYTHONPATH = {
 }
 
 
-def run_backtest(strategy_path, day=-1, taker_sim=False, match_trades="all"):
-    """Run backtester and return total PnL and per-product PnL."""
-    flags = f"--ticks 2000 --iterations 1000 --no-out --no-progress --match-trades {match_trades}"
-    if taker_sim:
-        flags += " --taker-sim"
+def run_backtest(strategy_path, day=-1, match_trades="all", match_mode="default"):
+    """Run backtester and return total PnL and per-product PnL.
+
+    NOTE: --iterations is intentionally omitted.  The website calls run()
+    on EVERY tick (confirmed from logs: 2000 log entries for 2000 ticks).
+    The old flag --iterations 1000 was incorrect and inflated local scores.
+    """
+    flags = f"--ticks 2000 --no-out --no-progress --match-trades {match_trades} --match-mode {match_mode}"
     cmd = f'python -m prosperity4bt "{strategy_path}" 0-{day} {flags}'
     env = os.environ.copy()
     env['PYTHONPATH'] = os.path.join(ROOT_DIR, 'prosperity4bt')
@@ -67,11 +70,11 @@ def spearman_rank_corr(x, y):
     return 1 - (6 * np.sum(d ** 2)) / (n * (n ** 2 - 1))
 
 
-def run_all_strategies(mode_name, taker_sim=False, match_trades="all"):
+def run_all_strategies(mode_name, match_trades="all", match_mode="default"):
     """Run all strategies and compare with website scores."""
     print(f"\n{'='*60}")
     print(f"  MODE: {mode_name}")
-    print(f"  taker_sim={taker_sim}, match_trades={match_trades}")
+    print(f"  match_trades={match_trades}, match_mode={match_mode}")
     print(f"{'='*60}")
 
     local_scores = []
@@ -86,7 +89,7 @@ def run_all_strategies(mode_name, taker_sim=False, match_trades="all"):
         if not os.path.exists(path):
             print(f"  SKIP (not found): {strat}")
             continue
-        r = run_backtest(path, taker_sim=taker_sim, match_trades=match_trades)
+        r = run_backtest(path, match_trades=match_trades, match_mode=match_mode)
         print(f"  {strat:35s}  local={r['total']:,}  website={website_score:,}  "
               f"(TOM={r['TOMATOES']:,} EM={r['EMERALDS']:,})")
         local_scores.append(r['total'])
@@ -99,7 +102,7 @@ def run_all_strategies(mode_name, taker_sim=False, match_trades="all"):
         if not os.path.exists(path):
             print(f"  SKIP (not found): {rel_path}")
             continue
-        r = run_backtest(path, taker_sim=taker_sim, match_trades=match_trades)
+        r = run_backtest(path, match_trades=match_trades, match_mode=match_mode)
         print(f"  {rel_path:35s}  local={r['total']:,}  website={website_score:,}  "
               f"(TOM={r['TOMATOES']:,} EM={r['EMERALDS']:,})")
         local_scores.append(r['total'])
@@ -148,20 +151,25 @@ def main():
     print("BACKTESTER CALIBRATION")
     print(f"Root: {ROOT_DIR}")
     print(f"Strategies dir: {ROUND_DIR}")
+    print()
+    print("NOTE: --iterations is no longer used.  The website calls run() on every")
+    print("tick, so omitting --iterations (default) is the correct setting.")
+    print("calibration_results.json was generated with the old --iterations 1000")
+    print("setting and is STALE.  Re-running will regenerate it with correct values.")
 
     results = {}
 
-    # Mode 1: Default (match-trades all, no taker sim)
-    results['default'] = run_all_strategies("Default (match-trades=all)", taker_sim=False, match_trades="all")
+    # Mode 1: Default (match-trades all, CSV-replay, deterministic)
+    results['default'] = run_all_strategies("Default (match-trades=all)", match_trades="all", match_mode="default")
 
     # Mode 2: match-trades worse
-    results['worse'] = run_all_strategies("match-trades=worse", taker_sim=False, match_trades="worse")
+    results['worse'] = run_all_strategies("match-trades=worse", match_trades="worse", match_mode="default")
 
-    # Mode 3: Taker simulation
-    results['taker_sim'] = run_all_strategies("Taker Simulation", taker_sim=True, match_trades="all")
+    # Mode 3: SIM mode (agent-based taker, stochastic — run multiple times)
+    results['sim'] = run_all_strategies("SIM mode (agent-based taker)", match_trades="all", match_mode="sim")
 
-    # Mode 4: Taker sim + match-trades worse (belt AND suspenders)
-    results['taker_worse'] = run_all_strategies("Taker Sim + worse", taker_sim=True, match_trades="worse")
+    # Mode 4: IMC exact matching + taker simulation from CSV
+    results['imc'] = run_all_strategies("IMC mode (== exact + CSV taker)", match_trades="all", match_mode="imc")
 
     # Summary
     print(f"\n{'='*60}")
