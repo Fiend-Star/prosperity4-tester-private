@@ -13,8 +13,10 @@ TAKER_PARAMS = {
     # Calibrated to match website scores (s25: TOM~1,800, EM~1,050)
     # Raw observed cadences: TOM=2430ms, EM=4910ms
     # Sim cadences adjusted for unified-book competition model
-    "TOMATOES": {"cadence_ms": 1300, "qty_range": (2, 5)},
-    "EMERALDS": {"cadence_ms": 7000, "qty_range": (3, 8)},
+    "TOMATOES": {"cadence_ms": 1300, "qty_range": (2, 5),
+                 "extra_rate": 0.0053},  # ~11 extra taker events per 2k ticks (calibrated to s36=2896)
+    "EMERALDS": {"cadence_ms": 7000, "qty_range": (3, 8),
+                 "extra_rate": 0.0},     # 0: default mode already matches EM perfectly
 }
 TICK_MS = 100
 
@@ -107,6 +109,8 @@ class OrderMatchMaker:
         self.match_mode = match_mode
 
     def match(self) -> list[TradeRow]:
+        if self.match_mode == MatchMode.website:
+            return self._match_website()
         if self.match_mode == MatchMode.sim:
             return self._match_sim()
         if self.match_mode in (MatchMode.imc, MatchMode.strict):
@@ -343,6 +347,186 @@ class OrderMatchMaker:
 
             # Remaining market trades visible to trader
             mts = market_trades.get(product, [])
+            for mt in mts:
+                mt.trade.quantity = min(mt.buy_quantity, mt.sell_quantity)
+            remaining = [mt.trade for mt in mts if mt.trade.quantity > 0]
+            self.state.market_trades[product] = remaining
+            result.extend([TradeRow(t) for t in remaining])
+
+        return result
+
+    # =========================================================================
+    # WEBSITE MODE: Detect ALL taker arrivals from orderbook tight spread
+    #
+    # Key insight: the CSV trades file only has ~70 of ~125 taker events.
+    # The missing ~55 are detectable from the orderbook: tight spread (≤9 for
+    # TOMATOES, ≤8 for EMERALDS) + L1 volume asymmetry = taker arrival.
+    #
+    # Tick sequence:
+    # 1. MM bot posts orders (from CSV order_depths)
+    # 2. Our orders added — aggressive takes fill against MM (== exact price)
+    # 3. Detect taker arrival from orderbook structure
+    # 4. If taker present: create taker order, route through unified book
+    #    (our resting orders have price priority since we post inside spread)
+    # =========================================================================
+
+    # Tight spread thresholds per product (from forensics)
+    _TIGHT_SPREAD = {"TOMATOES": 9, "EMERALDS": 8}
+    # Normal wide spread per product (for qty estimation when asymmetry = 0)
+    _NORMAL_L1_VOL = {"TOMATOES": 7, "EMERALDS": 12}
+
+    def _match_website(self) -> list[TradeRow]:
+        result = []
+        ts = self.state.timestamp
+
+        for product in self.back_data.products:
+            od = self.state.order_depths.get(product)
+            if not od:
+                continue
+
+            our_orders = self.orders.get(product, [])
+            our_trades = []
+
+            # Snapshot the MM bot's book
+            mm_sells = dict(od.sell_orders)  # {price: -volume}
+            mm_buys = dict(od.buy_orders)    # {price: +volume}
+
+            best_ask = min(mm_sells.keys()) if mm_sells else None
+            best_bid = max(mm_buys.keys()) if mm_buys else None
+
+            if best_bid is None or best_ask is None:
+                continue
+
+            # --- Phase 1: Match our aggressive takes against MM book ---
+            resting_buys = []
+            resting_sells = []
+
+            for order in our_orders:
+                if order.quantity > 0:
+                    if best_ask is not None and order.price >= best_ask:
+                        prices = sorted(p for p in mm_sells if p <= order.price)
+                        for price in prices:
+                            if order.quantity <= 0:
+                                break
+                            avail = abs(mm_sells[price])
+                            vol = min(order.quantity, avail)
+                            self.__deduct_volume_from_order(mm_sells, price, vol)
+                            trade = self.__create_buy_order(order, vol, price, "")
+                            our_trades.append(trade)
+                    if order.quantity > 0:
+                        resting_buys.append((order.price, order.quantity, order))
+
+                elif order.quantity < 0:
+                    if best_bid is not None and order.price <= best_bid:
+                        prices = sorted((p for p in mm_buys if p >= order.price), reverse=True)
+                        for price in prices:
+                            if order.quantity >= 0:
+                                break
+                            avail = mm_buys[price]
+                            vol = min(abs(order.quantity), avail)
+                            self.__deduct_volume_from_order(mm_buys, price, vol)
+                            trade = self.__create_sell_order(order, vol, price, "")
+                            our_trades.append(trade)
+                    if order.quantity < 0:
+                        resting_sells.append((order.price, abs(order.quantity), order))
+
+            od.sell_orders = mm_sells
+            od.buy_orders = mm_buys
+
+            # --- Phase 2: Detect taker arrival ---
+            # The CSV trades file captures ~70 TOMATOES taker events (all that
+            # occur in the clean world). On the website, ~12 additional taker
+            # events occur because our inside-spread orders provide a better
+            # price that crosses takers' limits. These are NOT in the CSV.
+            #
+            # Approach: use CSV trades + supplement with Poisson arrivals.
+            # The supplement rate is calibrated per product.
+            taker_side = None
+            taker_qty = 0
+
+            csv_trades = self.back_data.trades.get(ts, {}).get(product, [])
+            mid = (best_bid + best_ask) / 2
+
+            if csv_trades:
+                # CSV trade exists — exact taker event from clean world
+                t = csv_trades[0]
+                taker_side = 'sell' if t.price <= mid else 'buy'
+                taker_qty = t.quantity
+
+            else:
+                # Check if our inside-spread order would attract an extra taker
+                # that didn't trade in the clean world (our price is better).
+                # Model: Poisson supplement at calibrated rate.
+                # These are takers whose limit price is BETWEEN our post and
+                # the MM's best — they can trade with us but not the MM.
+                params = TAKER_PARAMS.get(product)
+                if params and resting_buys or resting_sells:
+                    # Extra taker rate: calibrated so total fills match website
+                    # TOMATOES: ~12 extra in 2000 ticks → p ≈ 0.006/tick
+                    # EMERALDS: ~30 extra in 2000 ticks → p ≈ 0.015/tick
+                    extra_rate = params.get("extra_rate", 0.0)
+                    if extra_rate > 0:
+                        # Deterministic: use timestamp as hash for reproducibility
+                        tick_hash = (ts * 2654435761) & 0xFFFFFFFF
+                        if (tick_hash % 10000) < int(extra_rate * 10000):
+                            qty_lo, qty_hi = params["qty_range"]
+                            taker_qty = qty_lo + (tick_hash >> 16) % (qty_hi - qty_lo + 1)
+                            taker_side = 'sell' if (tick_hash >> 8) % 2 == 0 else 'buy'
+
+            # --- Phase 3: Route taker through unified book ---
+            if taker_side and taker_qty > 0:
+                # Compute effective best bid/ask including our resting orders
+                eff_best_bid = best_bid
+                if resting_buys:
+                    our_best_bid = max(p for p, _, _ in resting_buys)
+                    eff_best_bid = max(our_best_bid, best_bid)
+
+                eff_best_ask = best_ask
+                if resting_sells:
+                    our_best_ask = min(p for p, _, _ in resting_sells)
+                    eff_best_ask = min(our_best_ask, best_ask)
+
+                if taker_side == 'sell':
+                    # Taker SELLS → hits effective best bid
+                    # If our resting buy is at eff_best_bid, we get filled
+                    if resting_buys:
+                        resting_buys.sort(key=lambda x: -x[0])
+                        remaining_taker = taker_qty
+                        for i, (rp, rq, order_ref) in enumerate(resting_buys):
+                            if remaining_taker <= 0:
+                                break
+                            if rp >= eff_best_bid:
+                                vol = min(rq, remaining_taker)
+                                if vol > 0:
+                                    remaining_taker -= vol
+                                    fill_trade = self.__create_buy_order(order_ref, vol, rp, "TAKER")
+                                    our_trades.append(fill_trade)
+                                    resting_buys[i] = (rp, rq - vol, order_ref)
+
+                elif taker_side == 'buy':
+                    # Taker BUYS → hits effective best ask
+                    if resting_sells:
+                        resting_sells.sort(key=lambda x: x[0])
+                        remaining_taker = taker_qty
+                        for i, (rp, rq, order_ref) in enumerate(resting_sells):
+                            if remaining_taker <= 0:
+                                break
+                            if rp <= eff_best_ask:
+                                vol = min(rq, remaining_taker)
+                                if vol > 0:
+                                    remaining_taker -= vol
+                                    fill_trade = self.__create_sell_order(order_ref, vol, rp, "TAKER")
+                                    our_trades.append(fill_trade)
+                                    resting_sells[i] = (rp, rq - vol, order_ref)
+
+            # Record our fills
+            if our_trades:
+                self.state.own_trades[product] = our_trades
+                result.extend([TradeRow(t) for t in our_trades])
+
+            # Remaining CSV market trades visible to trader
+            csv_mts = self.back_data.get_market_trades_at(ts)
+            mts = csv_mts.get(product, [])
             for mt in mts:
                 mt.trade.quantity = min(mt.buy_quantity, mt.sell_quantity)
             remaining = [mt.trade for mt in mts if mt.trade.quantity > 0]

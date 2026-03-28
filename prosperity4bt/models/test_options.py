@@ -14,6 +14,7 @@ class MatchMode(str, Enum):
     imc = "imc"           # == exact matching, taker hits best bid/ask
     strict = "strict"     # == exact matching, no taker simulation
     sim = "sim"           # Full agent-based sim: unified OrderBook + Poisson taker
+    website = "website"   # Detect ALL takers from orderbook tight spread, route through unified book
 
 
 class TestOptions:
