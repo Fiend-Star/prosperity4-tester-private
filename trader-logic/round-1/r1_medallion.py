@@ -40,9 +40,10 @@ IPR_CARRY_TRIGGER = 4
 IPR_CARRY_DECAY = 0.7
 IPR_CARRY_THRESHOLD = 0.5
 IPR_CARRY_WIDE = 3
-IPR_AGGRESSION_THRESHOLD = 40
-IPR_TERMINAL_TS = 900000
-IPR_TERMINAL_POS = 28
+IPR_AGGRESSION_THRESHOLD = 60
+IPR_DRIFT_BIAS = 5.0  # FV shift up to exploit deterministic +100/1k drift
+IPR_BUY_SLACK = 2     # Take asks up to FV+2
+IPR_SELL_SLACK = 3    # Only take bids at FV+3 or above
 
 # ═══ ASH_COATED_OSMIUM CONFIG ═══
 ACO = "ASH_COATED_OSMIUM"
@@ -50,8 +51,6 @@ ACO_LIMIT = 80
 ACO_FV = 10000
 ACO_AGGRESSION_THRESHOLD = 40
 ACO_LIQUIDATION_WINDOW = 10
-# No OBI shift for ACO — proven stable FV=10000 from Round 0
-# No terminal flatten for ACO — inventory carry is +EV (same lesson as EMERALDS)
 
 
 class Trader:
@@ -106,7 +105,7 @@ class Trader:
                 hard = (len(self.aco_liq) == ACO_LIQUIDATION_WINDOW
                         and all(self.aco_liq))
 
-                # Position-dependent aggression
+                # Position-dependent aggression (threshold=60)
                 max_buy = fv_int if pos <= ACO_AGGRESSION_THRESHOLD else fv_int - 1
                 min_sell = fv_int if pos >= -ACO_AGGRESSION_THRESHOLD else fv_int + 1
 
@@ -142,7 +141,7 @@ class Trader:
                     orders.append(Order(ACO, fv_int + 2, -(sell_cap // 2)))
                     sell_cap -= sell_cap // 2
 
-                # POST: symmetric best±1
+                # POST: best±1 with one-sided book handling
                 if has_bids and has_asks:
                     if buy_cap > 0:
                         bp = min(fv_int - 1, best_bid + 1, best_ask - 1)
@@ -175,124 +174,142 @@ class Trader:
             has_bids = bool(book.buy_orders)
             has_asks = bool(book.sell_orders)
 
-            if has_bids and has_asks:
+            if has_bids or has_asks:
                 orders = []
-                best_bid = max(book.buy_orders)
-                best_ask = min(book.sell_orders)
+                best_bid = max(book.buy_orders) if has_bids else None
+                best_ask = min(book.sell_orders) if has_asks else None
                 pos = state.position.get(IPR, 0)
-                mid = (best_bid + best_ask) * 0.5
 
-                # Microprice regression
-                total_bv = sum(book.buy_orders.values())
-                total_av = sum(-v for v in book.sell_orders.values())
-                mp = (best_bid + (total_bv / (total_bv + total_av)) * (best_ask - best_bid)
-                      if (total_bv + total_av) > 0 else mid)
+                if has_bids and has_asks:
+                    mid = (best_bid + best_ask) * 0.5
 
-                hist = self.ipr_mp
-                if len(hist) >= IPR_LAGS:
-                    hist = hist[1:]
-                hist.append(mp)
-                self.ipr_mp = hist
+                    # Microprice regression
+                    total_bv = sum(book.buy_orders.values())
+                    total_av = sum(-v for v in book.sell_orders.values())
+                    mp = (best_bid + (total_bv / (total_bv + total_av)) * (best_ask - best_bid)
+                          if (total_bv + total_av) > 0 else mid)
 
-                if len(hist) == IPR_LAGS:
-                    fv = IPR_INTERCEPT + sum(c * x for c, x in zip(IPR_COEFS, hist))
+                    hist = self.ipr_mp
+                    if len(hist) >= IPR_LAGS:
+                        hist = hist[1:]
+                    hist.append(mp)
+                    self.ipr_mp = hist
+
+                    if len(hist) == IPR_LAGS:
+                        fv = IPR_INTERCEPT + sum(c * x for c, x in zip(IPR_COEFS, hist))
+                    else:
+                        fv = mp
+
+                    # Trade flow
+                    mt = state.market_trades.get(IPR)
+                    if mt:
+                        nf = sum(t.quantity if t.price >= mid else -t.quantity for t in mt)
+                        self.ipr_tf.append(nf)
+                    else:
+                        self.ipr_tf.append(0.0)
+                    if len(self.ipr_tf) > IPR_TRADE_FLOW_WINDOW:
+                        self.ipr_tf = self.ipr_tf[-IPR_TRADE_FLOW_WINDOW:]
+
+                    fs = max(-1.0, min(1.0, sum(self.ipr_tf) / IPR_TRADE_FLOW_NORM))
+                    fv -= fs * IPR_TRADE_FLOW_COEF
+
+                    # OBI shift
+                    obi = ((total_bv - total_av) / (total_bv + total_av)
+                           if (total_bv + total_av) > 0 else 0.0)
+                    fv += obi * IPR_OBI_SHIFT
+
+                    # Drift bias: IPR drifts +100/1000 ticks deterministically
+                    fv += IPR_DRIFT_BIAS
+
+                    fv_int = round(fv)
+
+                    # Carry signal
+                    if self.ipr_pb is not None:
+                        bd = best_bid - self.ipr_pb
+                        if bd >= IPR_CARRY_TRIGGER:
+                            self.ipr_carry = -1.0
+                        elif bd <= -IPR_CARRY_TRIGGER:
+                            self.ipr_carry = 1.0
+                        elif abs(bd) <= 1:
+                            self.ipr_carry *= IPR_CARRY_DECAY
+                    self.ipr_pb = best_bid
+
+                    buy_cap = IPR_LIMIT - pos
+                    sell_cap = IPR_LIMIT + pos
+
+                    # Asymmetric takes: buy aggressively, sell defensively (drift is UP)
+                    buy_thresh = fv_int + IPR_BUY_SLACK
+                    sell_thresh = fv_int + IPR_SELL_SLACK
+
+                    for price, vol in sorted(book.sell_orders.items()):
+                        if buy_cap > 0 and price <= buy_thresh:
+                            qty = min(buy_cap, -vol)
+                            orders.append(Order(IPR, price, qty))
+                            buy_cap -= qty
+
+                    for price, vol in sorted(book.buy_orders.items(), reverse=True):
+                        if sell_cap > 0 and price >= sell_thresh:
+                            qty = min(sell_cap, vol)
+                            orders.append(Order(IPR, price, -qty))
+                            sell_cap -= qty
+
+                    # Directional posting (carry signal) — long-biased
+                    if self.ipr_carry > IPR_CARRY_THRESHOLD:
+                        # Bullish carry: aggressive bid, very wide ask
+                        if buy_cap > 0:
+                            bp = min(fv_int - 1, best_bid + 1, best_ask - 1)
+                            orders.append(Order(IPR, bp, buy_cap))
+                        if sell_cap > 0:
+                            if pos >= IPR_AGGRESSION_THRESHOLD:
+                                ap = max(fv_int + 1, best_ask - 1)
+                            else:
+                                ap = max(fv_int + IPR_CARRY_WIDE + 1, best_ask - 1)
+                            ap = max(ap, best_bid + 1)
+                            orders.append(Order(IPR, ap, -sell_cap))
+                    elif self.ipr_carry < -IPR_CARRY_THRESHOLD:
+                        # Bearish carry: still bias long — aggressive bid, normal ask
+                        if sell_cap > 0:
+                            ap = max(fv_int + 1, best_ask - 1, best_bid + 1)
+                            orders.append(Order(IPR, ap, -sell_cap))
+                        if buy_cap > 0:
+                            if pos <= -IPR_AGGRESSION_THRESHOLD:
+                                bp = min(fv_int - 1, best_bid + 1)
+                            else:
+                                bp = min(fv_int - IPR_CARRY_WIDE + 1, best_bid + 1)
+                            bp = min(bp, best_ask - 1)
+                            orders.append(Order(IPR, bp, buy_cap))
+                    else:
+                        # Neutral: aggressive bid, defensive ask
+                        if buy_cap > 0:
+                            bp = min(fv_int - 1, best_bid + 1, best_ask - 1)
+                            orders.append(Order(IPR, bp, buy_cap))
+                        if sell_cap > 0:
+                            ap = max(fv_int + 2, best_ask - 1, best_bid + 1)
+                            orders.append(Order(IPR, ap, -sell_cap))
+
                 else:
-                    fv = mp
+                    # One-sided book: use last known FV or drift-biased mid
+                    buy_cap = IPR_LIMIT - pos
+                    sell_cap = IPR_LIMIT + pos
 
-                # Trade flow
-                mt = state.market_trades.get(IPR)
-                if mt:
-                    nf = sum(t.quantity if t.price >= mid else -t.quantity for t in mt)
-                    self.ipr_tf.append(nf)
-                else:
-                    self.ipr_tf.append(0.0)
-                if len(self.ipr_tf) > IPR_TRADE_FLOW_WINDOW:
-                    self.ipr_tf = self.ipr_tf[-IPR_TRADE_FLOW_WINDOW:]
-
-                fs = max(-1.0, min(1.0, sum(self.ipr_tf) / IPR_TRADE_FLOW_NORM))
-                fv -= fs * IPR_TRADE_FLOW_COEF
-
-                # OBI shift
-                obi = ((total_bv - total_av) / (total_bv + total_av)
-                       if (total_bv + total_av) > 0 else 0.0)
-                fv += obi * IPR_OBI_SHIFT
-
-                fv_int = round(fv)
-
-                # Carry signal
-                if self.ipr_pb is not None:
-                    bd = best_bid - self.ipr_pb
-                    if bd >= IPR_CARRY_TRIGGER:
-                        self.ipr_carry = -1.0
-                    elif bd <= -IPR_CARRY_TRIGGER:
-                        self.ipr_carry = 1.0
-                    elif abs(bd) <= 1:
-                        self.ipr_carry *= IPR_CARRY_DECAY
-                self.ipr_pb = best_bid
-
-                buy_cap = IPR_LIMIT - pos
-                sell_cap = IPR_LIMIT + pos
-
-                # Take at FV
-                for price, vol in sorted(book.sell_orders.items()):
-                    if buy_cap > 0 and price <= fv_int:
-                        qty = min(buy_cap, -vol)
-                        orders.append(Order(IPR, price, qty))
-                        buy_cap -= qty
-
-                for price, vol in sorted(book.buy_orders.items(), reverse=True):
-                    if sell_cap > 0 and price >= fv_int:
-                        qty = min(sell_cap, vol)
-                        orders.append(Order(IPR, price, -qty))
-                        sell_cap -= qty
-
-                # Terminal flatten
-                if state.timestamp > IPR_TERMINAL_TS and abs(pos) > IPR_TERMINAL_POS:
-                    if pos > 0 and sell_cap > 0:
-                        for price, vol in sorted(book.buy_orders.items(), reverse=True):
-                            if sell_cap > 0 and pos > 0:
-                                qty = min(sell_cap, vol, pos)
-                                orders.append(Order(IPR, price, -qty))
-                                sell_cap -= qty
-                                pos -= qty
-                    elif pos < 0 and buy_cap > 0:
-                        for price, vol in sorted(book.sell_orders.items()):
-                            if buy_cap > 0 and pos < 0:
-                                qty = min(buy_cap, -vol, -pos)
-                                orders.append(Order(IPR, price, qty))
-                                buy_cap -= qty
-                                pos += qty
-
-                # Directional posting (carry signal)
-                if self.ipr_carry > IPR_CARRY_THRESHOLD:
-                    if buy_cap > 0:
-                        bp = min(fv_int - 1, best_bid + 1, best_ask - 1)
-                        orders.append(Order(IPR, bp, buy_cap))
-                    if sell_cap > 0:
-                        if pos >= IPR_AGGRESSION_THRESHOLD:
-                            ap = max(fv_int + 1, best_ask - 1)
-                        else:
-                            ap = max(fv_int + IPR_CARRY_WIDE, best_ask - 1)
-                        ap = max(ap, best_bid + 1)
-                        orders.append(Order(IPR, ap, -sell_cap))
-                elif self.ipr_carry < -IPR_CARRY_THRESHOLD:
-                    if sell_cap > 0:
-                        ap = max(fv_int + 1, best_ask - 1, best_bid + 1)
-                        orders.append(Order(IPR, ap, -sell_cap))
-                    if buy_cap > 0:
-                        if pos <= -IPR_AGGRESSION_THRESHOLD:
-                            bp = min(fv_int - 1, best_bid + 1)
-                        else:
-                            bp = min(fv_int - IPR_CARRY_WIDE, best_bid + 1)
-                        bp = min(bp, best_ask - 1)
-                        orders.append(Order(IPR, bp, buy_cap))
-                else:
-                    if buy_cap > 0:
-                        bp = min(fv_int - 1, best_bid + 1, best_ask - 1)
-                        orders.append(Order(IPR, bp, buy_cap))
-                    if sell_cap > 0:
-                        ap = max(fv_int + 1, best_ask - 1, best_bid + 1)
-                        orders.append(Order(IPR, ap, -sell_cap))
+                    if has_bids and not has_asks:
+                        # Only bids (no asks) — price dropped, buy opportunity
+                        # Post aggressive bid + sell at best_bid + spread estimate
+                        if buy_cap > 0:
+                            bp = best_bid + 1
+                            orders.append(Order(IPR, bp, buy_cap))
+                        if sell_cap > 0:
+                            ap = best_bid + 14  # ~avg spread
+                            orders.append(Order(IPR, ap, -sell_cap))
+                    elif has_asks and not has_bids:
+                        # Only asks (no bids) — price spiked, sell opportunity
+                        # Post aggressive buy below ask + sell inside ask
+                        if buy_cap > 0:
+                            bp = best_ask - 14  # ~avg spread below ask
+                            orders.append(Order(IPR, bp, buy_cap))
+                        if sell_cap > 0:
+                            ap = best_ask - 1
+                            orders.append(Order(IPR, ap, -sell_cap))
 
                 result[IPR] = orders
 
