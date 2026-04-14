@@ -85,7 +85,7 @@ class Trader:
 
 **Order format:** `Order(symbol, price, quantity)` — positive qty = buy, negative = sell.
 **OrderDepth:** `sell_orders` volumes are **negative** integers.
-**Position limits:** EMERALDS: 80, TOMATOES: 80 (`prosperity4bt/constants.py`).
+**Position limits:** All products 80 (`prosperity4bt/constants.py`): EMERALDS, TOMATOES, ASH_COATED_OSMIUM, INTARIAN_PEPPER_ROOT.
 **Do NOT modify** `prosperity4bt/datamodel.py`.
 
 ## Key Files
@@ -98,6 +98,8 @@ class Trader:
 | `prosperity4bt/constants.py` | Position limits |
 | `prosperity4bt/tools/order_match_maker.py` | Exchange matching simulation |
 | `prosperity4bt/tools/data_reader.py` | CSV -> BacktestData |
+| `trader-logic/auction_solver.py` | Manual challenge clearing auction optimizer |
+| `trader-logic/auction_writeup.md` | Round 1 manual challenge solution + derivation |
 | `trader-logic/round-0/` | All trading strategy files |
 | `trader-logic/round-0/strategy/` | 7-module bot exploitation pipeline (for Round 1+) |
 | `trader-logic/round-0/analysis/` | Offline analysis scripts (bot fingerprinting, adverse selection) |
@@ -381,7 +383,18 @@ Pre-built in `trader-logic/round-1/`:
 - Treat CSV-fitted coefficients as a starting point, not ground truth — expect to iterate on website
 - Tutorial survived because s3/s25 rely on price structure, not volume specifics — new products may not be as forgiving
 
-## File Organization (Round 0)
+## File Organization
+
+```
+trader-logic/
+├── auction_solver.py                    # Manual challenge clearing auction optimizer (reusable)
+├── auction_writeup.md                   # Round 1 manual challenge solution
+├── Prosperity_Fundamentals.pdf          # Take-Clear-Make framework guide
+├── round-0/                             # Tutorial round strategies
+├── round-1/                             # Round 1 templates (7 files)
+```
+
+### Round 0 Detail
 
 ```
 trader-logic/round-0/
@@ -431,6 +444,25 @@ trader-logic/round-0/
 
 **Key finding:** Website market data is 100% deterministic — clean logger data matches trading-run data perfectly (0 differences across 4,000 rows). Our orders do NOT change the book. The DP oracle scores WORSE than our legit strategy because spread crossing costs exceed directional gains in a static-book simulation. **However:** the website data does NOT match the CSV files used by the local backtester (98.5% volume mismatch, 9.3% price mismatch even with zero orders) — the CSV is a different realization of the same market.
 
+## Round 1 Manual Challenge: "An Intarian Welcome"
+
+One-shot uniform-price clearing auction. Stale order books for two products, one limit order each, buyback at fixed price after auction.
+
+**Clearing rule:** price that maximizes `min(cum_bids >= P, cum_asks <= P)`, tie-break highest price. Price-time priority allocation (we submit last = last in time at our price level).
+
+**Key exploit:** bid ABOVE target clearing price for price priority, cap volume just below the threshold that tips clearing upward. This lets us fill at lower clearing price while jumping the queue.
+
+| Product | Order | Clearing | Fills | Edge | Profit |
+|---------|-------|:--------:|------:|-----:|-------:|
+| Dryland Flax (buyback=30, no fee) | BUY @ 30, vol 9,999 | 29 | 9,999 | 1.00 | 9,999 |
+| Ember Mushroom (buyback=20, fee=0.10) | BUY @ 17, vol 19,999 | 16 | 19,999 | 3.90 | 77,996 |
+| **Total** | | | | | **87,995** |
+
+Cliff edges: Flax vol 10,000 -> clearing 30 -> profit 0. Mushroom vol 20,000 -> clearing 17 -> profit 58,000.
+
+**Solver:** `trader-logic/auction_solver.py` (exhaustive 2D price*volume sweep, step=1 at boundaries)
+**Writeup:** `trader-logic/auction_writeup.md`
+
 ## P3 vs P4 Data Comparison
 
 P3 Kelp/Resin data is **completely different** from P4 TOMATOES/EMERALDS:
@@ -439,3 +471,155 @@ P3 Kelp/Resin data is **completely different** from P4 TOMATOES/EMERALDS:
 - L1 volume: Kelp 21.9 vs TOMATOES 7.5 (3x smaller)
 - Only AC(1) ≈ -0.45 is shared (structural game engine property)
 - **Data-reuse exploit is DEAD** for P4
+
+---
+
+## Round 1: "Trading Groundwork"
+
+### Round 1 Products
+
+| Product | Limit | Price | Range/day | Spread | L1 vol | AC(1) | Archetype |
+|---------|-------|-------|-----------|--------|--------|-------|-----------|
+| INTARIAN_PEPPER_ROOT | 80 | ~12,000 | 1,000 | 12-14 | 11.5 | -0.50 | TOMATOES (random walk) |
+| ASH_COATED_OSMIUM | 80 | ~10,000 | 27-36 | 16 (62%) | 14.0 | -0.49 | EMERALDS (stable FV) |
+
+**IPR** has +1000/day uptrend across CSV days (-2: ~10k, -1: ~11k, 0: ~12k). "Steady value" per spec.
+**ACO** has "hidden pattern" per spec = O-U mean-reversion to FV ~10000. Mid deviates ±18 max.
+**Both products** have ~9% one-sided book ticks (no bid or no ask). Strategy must handle gracefully.
+
+### Round 1 Key Differences from Round 0
+
+| Metric | Round 0 (Tutorial) | Round 1 |
+|--------|-------------------|---------|
+| Website tutorial ticks | 2,000 per product | **1,000 per product** |
+| CSV ≠ website match | Day 0 = 100% match | **Day 0 = 36% match** |
+| Taker arrival rate | ~70/2000 ticks (3.5%) | **~300/1000 ticks (30%)** |
+| Taker CoV | 0.99 (Poisson) | **0.76-0.81 (more regular)** |
+| One-sided book ticks | 0% | **~9%** |
+| PnL from taker fills | ~70% | **~70%** |
+
+### Round 1 Bot Behavior (Website-Confirmed)
+
+**MM Bot**: 100% non-reactive to our orders (confirmed: god logger vs trading run = 0 differences across 2000 rows). Same engine as Round 0.
+
+**Taker Bot** (from clean book forensics, 1000 ticks):
+- IPR: ~300 arrivals/1000 ticks, qty [3-8], side 50/50
+- ACO: ~308 arrivals/1000 ticks, qty [2-10], side 50/50
+- Arrival pattern NOT Poisson (CoV 0.76-0.81 vs 1.0 expected)
+- Asymmetric L1 volumes on ~33% of ticks (mix of taker + MM's own asymmetry)
+- 70% of PnL comes from taker fills, only 30% from order-depth takes
+
+### Round 1 Regression (Cross-Validated 3 Days)
+
+**INTARIAN_PEPPER_ROOT** (4-lag microprice regression):
+```python
+COEFS = [0.2474, 0.2529, 0.2412, 0.2585]  # Nearly uniform (~0.25 each)
+INTERCEPT = 0.2078                           # Near zero
+# Coef sum = 1.0 → FV ≈ average of last 4 microprice values
+# RMSE = 1.23-1.46 (stable across days)
+```
+
+**ASH_COATED_OSMIUM** (regression also works but less needed):
+```python
+COEFS = [0.214, 0.215, 0.250, 0.294]
+INTERCEPT = 215-387 (varies by day — absorbed by FV ~10000)
+# Coef sum = 0.96-0.98 (not quite 1.0 → slight mean-reversion)
+```
+
+### Round 1 Website Scores
+
+| Strategy | Score | IPR | ACO | Key |
+|----------|-------|-----|-----|-----|
+| r1_medallion | **5,229** | 2,138 | **3,091** | **BEST** — basic + ACO one-sided handling |
+| trader (basic) | 4,934 | 2,138 | 2,796 | Baseline: regression MM + FV=10000 MM |
+
+**Entire +295 delta is from ACO one-sided book handling.** IPR identical (2,138 both). Posting on the missing side when MM has one-sided book = sole liquidity provider = captures taker flow that basic trader skips.
+
+### Round 1 Backtester Cross-Validation (4 Backtesters)
+
+All tested on same CSV data, day 0, 1k ticks:
+
+| Backtester | Basic | Medallion | Delta | Notes |
+|---|---|---|---|---|
+| **Website** | **4,934** | **5,229** | **+295** | Ground truth |
+| Ours | 6,528 | 6,640 | +112 | Conservative matching |
+| Kevin-fu1 | 7,702 | 7,814 | +112 | More generous matching (default=worse) |
+| Xeeshan/prosperity4btx | 7,702 | 7,814 | +112 | Same as Kevin at 1k |
+| Rust (GeyzsoN) | 6,528 | 6,640 | +112 | **Matches ours exactly** |
+
+**Key findings:**
+1. All 4 backtesters agree: medallion > basic (+112 at 1k ticks, +295 on website)
+2. Our backtester = Rust backtester (identical scores — independent validation)
+3. Kevin/Xeeshan give ~18% higher scores (more generous market trade matching)
+4. All overpredict vs website by 30-56% (CSV ≠ website data, 36% book match)
+5. Backtesters are for **structural ranking only**, not absolute PnL prediction
+
+### Round 1 CSV vs Website Data
+
+- **Day 0 CSV ≠ website** — only 36% L1 price match (vs Round 0's 100%)
+- **God logger website data** extracted to `prices_round_1_day_0_website.csv` (1000 ticks)
+- Order-depth-only PnL on website data: 1,471 (30% of total 4,934)
+- Taker fill PnL: ~3,463 (70% of total) — cannot simulate accurately from CSV
+- Website data preserved as `*_website.csv` files in `prosperity4bt/resources/round1/`
+
+### Round 1 Strategy Architecture
+
+**r1_medallion.py** (Current Best: Website 5,229):
+
+**INTARIAN_PEPPER_ROOT** (s36_medallion architecture):
+- Microprice 4-lag regression: uniform coefs [0.25, 0.25, 0.24, 0.26], intercept ~0.2
+- Trade flow signal (coef=1.5, window=5, norm=15)
+- L1/L2 OBI shift (+0.5)
+- Carry signal: directional posting after ±4 bid moves (decay 0.7)
+- Position aggression at |pos| > 40
+- Terminal flattening at ts > 900k (full-day only, never fires on 1k tutorial)
+
+**ASH_COATED_OSMIUM** (proven EMERALDS architecture):
+- Fixed FV = 10000 (no OBI shift — doesn't help ACO)
+- Take at FV, post at best±1
+- Liquidation tracking (10-tick window, soft/hard)
+- Position-dependent aggression at |pos| > 40
+- **One-sided book handling**: post on missing side at FV±1 (sole liquidity = +295 website PnL)
+- No terminal flatten (inventory carry is +EV, same lesson as EMERALDS)
+
+### Round 1 Critical Lessons
+
+1. **One-sided book handling = +295 PnL** — posting when MM has only bids or only asks captures taker flow the basic trader skips entirely. This is 6% of total PnL.
+2. **IPR signals (OBI, carry, trade flow) have ZERO website effect** — identical to Round 0 ceiling behavior. The 2,138 IPR score is identical for basic and medallion.
+3. **ACO O-U directional posting is CATASTROPHIC on full days** — builds massive inventory that doesn't revert. -161k on day 0 full. Removed from medallion.
+4. **Terminal flattening hurts on full days** — selling at market bid (FV-8) to flatten costs 640+ per flatten. Same Round 0 lesson: inventory reduction = anti-alpha.
+5. **CSV ≠ website is SEVERE for Round 1** (36% match vs Round 0's 100%). Backtester is structurally useful only.
+6. **Website tutorial is 1000 ticks** (not 2000 like Round 0). Confirmed from god logger activity log.
+7. **All 4 backtesters agree on relative ranking** — independent validation that our matching logic is correct (Rust backtester produces identical scores).
+
+### Round 1 File Organization
+
+```
+trader-logic/round-1/
+├── r1_medallion.py                      # CURRENT BEST (website 5,229)
+├── trader.py                            # Basic combined trader (website 4,934)
+├── template_stable.py                   # ACO template (EMERALDS-like)
+├── template_random_walk.py              # IPR template (TOMATOES-like)
+├── template_basket.py                   # ETF basket arb template
+├── template_options.py                  # Options template
+├── template_conversion.py               # Cross-exchange arb template
+├── template_olivia.py                   # Insider bot detection template
+├── refit_regression.py                  # Utility: auto-refit microprice regression
+└── analysis_round1.py                   # Product analysis script
+
+run-logs/round-1/
+├── god-logger-run/103917/               # Clean book (zero orders) — website day 0
+├── 105087/                              # Basic trader run — website 4,934
+└── 105821/                              # r1_medallion run — website 5,229
+```
+
+### Reference Backtesters (Round 1 Validated)
+
+| Backtester | Language | Matching | Key Feature |
+|---|---|---|---|
+| Ours (fork of jmerle P3) | Python | default/imc/sim/website | Custom `website` mode with taker supplement |
+| [kevin-fu1](https://github.com/kevin-fu1/imc-prosperity-4-backtester) | Python | default (worse) | Only processes 1 buy + 1 sell vs market trades |
+| [Xeeshan85/prosperity4btx](https://pypi.org/project/prosperity4btx/) | Python | all/worse/none | Published PyPI package, 3 match modes |
+| [GeyzsoN/rust](https://github.com/GeyzsoN/prosperity_rust_backtester) | Rust | all + queue penetration | Position carry across days, slippage modeling |
+
+**All confirm**: fill at ORDER price (not market trade price), all-or-nothing limit enforcement, MM non-reactive.
