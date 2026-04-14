@@ -10,13 +10,19 @@ from prosperity4bt.models.test_options import TradeMatchingMode, MatchMode
 # Bot parameters (reverse-engineered from tutorial round data)
 # =========================================================================
 TAKER_PARAMS = {
-    # Calibrated to match website scores (s25: TOM~1,800, EM~1,050)
-    # Raw observed cadences: TOM=2430ms, EM=4910ms
-    # Sim cadences adjusted for unified-book competition model
+    # Round 0 (tutorial)
     "TOMATOES": {"cadence_ms": 1300, "qty_range": (2, 5),
-                 "extra_rate": 0.0053},  # ~11 extra taker events per 2k ticks (calibrated to s36=2896)
+                 "extra_rate": 0.0053},
     "EMERALDS": {"cadence_ms": 7000, "qty_range": (3, 8),
-                 "extra_rate": 0.0},     # 0: default mode already matches EM perfectly
+                 "extra_rate": 0.0},
+    # Round 1 — calibrated from 10 website submissions (132124 etc.)
+    # 59 inside-spread fills per 1000 ticks: 42 on non-taker ticks + 17 taker redirects
+    # Inside-spread fills are STRATEGY-INDEPENDENT (same count across all 10 runs)
+    # extra_rate = 42 fills / 692 non-taker ticks = 0.0607
+    "INTARIAN_PEPPER_ROOT": {"cadence_ms": 333, "qty_range": (3, 17),
+                              "extra_rate": 0.0},   # IPR is 99.8% accurate without extras
+    "ASH_COATED_OSMIUM": {"cadence_ms": 324, "qty_range": (2, 10),
+                           "extra_rate": 0.064},    # Calibrated: day1 ACO=3122 vs website 3091 (99%)
 }
 TICK_MS = 100
 
@@ -293,52 +299,45 @@ class OrderMatchMaker:
             od.sell_orders = mm_sells
             od.buy_orders = mm_buys
 
-            # --- Phase 2: Taker simulation (imc mode only, skip for strict) ---
+            # --- Phase 2: Inside-spread taker fills (imc mode only) ---
+            # Our inside-spread orders attract takers that wouldn't trade against
+            # the MM's wider quotes. Confirmed strategy-independent across 10 runs.
+            # This replaces the old per-CSV-trade routing which overcounted 6x.
             if self.match_mode == MatchMode.imc:
-                # Compute effective best bid/ask including our resting orders
-                eff_best_bid = best_bid
-                if resting_buys:
-                    our_best_bid = max(p for p, _, _ in resting_buys)
-                    eff_best_bid = max(our_best_bid, best_bid) if best_bid else our_best_bid
+                params = TAKER_PARAMS.get(product)
+                if params and params.get("extra_rate", 0) > 0:
+                    extra_rate = params["extra_rate"]
+                    ts = self.state.timestamp
+                    # Deterministic hash for reproducibility
+                    tick_hash = (ts * 2654435761 + hash(product)) & 0xFFFFFFFF
+                    if (tick_hash % 10000) < int(extra_rate * 10000):
+                        qty_lo, qty_hi = params["qty_range"]
+                        taker_qty = qty_lo + (tick_hash >> 16) % (qty_hi - qty_lo + 1)
+                        taker_sells = (tick_hash >> 8) % 2 == 0
 
-                eff_best_ask = best_ask
-                if resting_sells:
-                    our_best_ask = min(p for p, _, _ in resting_sells)
-                    eff_best_ask = min(our_best_ask, best_ask) if best_ask else our_best_ask
-
-                mid = ((best_bid or 0) + (best_ask or 99999)) / 2
-
-                for mt in market_trades.get(product, []):
-                    trade = mt.trade
-
-                    if trade.price <= mid:
-                        # Taker SOLD — hits the effective best bid
-                        # Check if our resting buy is at the effective best bid
-                        if eff_best_bid is not None and resting_buys:
-                            # Sort resting buys: highest price first (best bid), then by insertion order
+                        # Only fill if our resting order improves the MM's best
+                        if taker_sells and resting_buys:
                             resting_buys.sort(key=lambda x: -x[0])
                             for i, (rp, rq, order_ref) in enumerate(resting_buys):
-                                if rp == eff_best_bid and rq > 0:
-                                    vol = min(rq, mt.sell_quantity)
+                                if rq > 0 and (best_bid is None or rp > best_bid):
+                                    vol = min(rq, taker_qty)
                                     if vol > 0:
-                                        mt.sell_quantity -= vol
-                                        fill_trade = self.__create_buy_order(order_ref, vol, rp, "TAKER")
-                                        our_trades.append(fill_trade)
+                                        fill = self.__create_buy_order(
+                                            order_ref, vol, rp, "TAKER")
+                                        our_trades.append(fill)
                                         resting_buys[i] = (rp, rq - vol, order_ref)
-                                        break
-                    else:
-                        # Taker BOUGHT — hits the effective best ask
-                        if eff_best_ask is not None and resting_sells:
+                                    break
+                        elif not taker_sells and resting_sells:
                             resting_sells.sort(key=lambda x: x[0])
                             for i, (rp, rq, order_ref) in enumerate(resting_sells):
-                                if rp == eff_best_ask and rq > 0:
-                                    vol = min(rq, mt.buy_quantity)
+                                if rq > 0 and (best_ask is None or rp < best_ask):
+                                    vol = min(rq, taker_qty)
                                     if vol > 0:
-                                        mt.buy_quantity -= vol
-                                        fill_trade = self.__create_sell_order(order_ref, vol, rp, "TAKER")
-                                        our_trades.append(fill_trade)
+                                        fill = self.__create_sell_order(
+                                            order_ref, vol, rp, "TAKER")
+                                        our_trades.append(fill)
                                         resting_sells[i] = (rp, rq - vol, order_ref)
-                                        break
+                                    break
 
             # Record our fills
             if our_trades:
