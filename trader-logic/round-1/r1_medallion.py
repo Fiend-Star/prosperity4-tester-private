@@ -47,16 +47,12 @@ IPR_DRIFT_BIAS = 5.0  # FV shift up to exploit deterministic +100/1k drift
 IPR_BUY_SLACK = 2     # Take asks up to FV+2
 IPR_SELL_SLACK = 3    # Only take bids at FV+3 or above
 
-# ═══ ASH_COATED_OSMIUM CONFIG (take/clear/make from TROLL's framework) ═══
+# ═══ ASH_COATED_OSMIUM CONFIG ═══
 ACO = "ASH_COATED_OSMIUM"
 ACO_LIMIT = 80
 ACO_FV = 10000
-ACO_TAKE_VOL_FILTER = 10   # Only take L1 when vol < this (adverse selection filter)
-ACO_DISREGARD_EDGE = 0     # Consider all quotes for join/penny logic
-ACO_JOIN_EDGE = 5           # Join quotes within 5 ticks of FV (wider = less pennying)
-ACO_DEFAULT_EDGE = 2        # Tight posting when no joinable quote
-ACO_SOFT_LIMIT = 40         # Start mild skewing at |pos| > 40
-ACO_HARD_LIMIT = 80         # Never aggressively skew (trust FV=10000)
+ACO_AGGRESSION_THRESHOLD = 40
+ACO_LIQUIDATION_WINDOW = 10
 
 
 class Trader:
@@ -65,6 +61,7 @@ class Trader:
         self.ipr_tf = []
         self.ipr_pb = None
         self.ipr_carry = 0.0
+        self.aco_liq = []
 
     def bid(self):
         return 15
@@ -76,102 +73,95 @@ class Trader:
             self.ipr_tf = saved.get("f", [])
             self.ipr_pb = saved.get("b")
             self.ipr_carry = saved.get("c", 0.0)
+            self.aco_liq = saved.get("l", [])
 
         result = {}
         conversions = 0
 
         # ═══════════════════════════════════════════════════
-        # ASH_COATED_OSMIUM — Take/Clear/Make (adapted from TROLL's framework)
+        # ASH_COATED_OSMIUM — FV=10000, take at FV, post best±1
         # ═══════════════════════════════════════════════════
         if ACO in state.order_depths:
-            od = state.order_depths[ACO]
-            pos = state.position.get(ACO, 0)
-            fair = ACO_FV
-            limit = ACO_LIMIT
-            bvol = svol = 0
-            orders = []
+            book = state.order_depths[ACO]
+            has_bids = bool(book.buy_orders)
+            has_asks = bool(book.sell_orders)
 
-            # ── TAKE: filtered by volume (adverse selection) ──
-            if od.sell_orders:
-                ba = min(od.sell_orders)
-                av = -od.sell_orders[ba]
-                if ba <= fair - 1 and av < ACO_TAKE_VOL_FILTER:
-                    qty = min(av, limit - pos - bvol)
-                    if qty > 0:
-                        orders.append(Order(ACO, ba, qty))
-                        bvol += qty
+            if has_bids or has_asks:
+                orders = []
+                pos = state.position.get(ACO, 0)
+                buy_cap = ACO_LIMIT - pos
+                sell_cap = ACO_LIMIT + pos
 
-            if od.buy_orders:
-                bb = max(od.buy_orders)
-                bv = od.buy_orders[bb]
-                if bb >= fair + 1 and bv < ACO_TAKE_VOL_FILTER:
-                    qty = min(bv, limit + pos - svol)
-                    if qty > 0:
-                        orders.append(Order(ACO, bb, -qty))
-                        svol += qty
+                fv_int = ACO_FV
 
-            # ── CLEAR: flatten net position at FV ──
-            net = pos + bvol - svol
-            if net > 0:
-                fair_ask = round(fair)
-                available = sum(v for p, v in od.buy_orders.items() if p >= fair_ask)
-                qty = min(available, net, limit + pos - svol)
-                if qty > 0:
-                    orders.append(Order(ACO, fair_ask, -qty))
-                    svol += qty
-            elif net < 0:
-                fair_bid = round(fair)
-                available = sum(-v for p, v in od.sell_orders.items() if p <= fair_bid)
-                qty = min(available, -net, limit - pos - bvol)
-                if qty > 0:
-                    orders.append(Order(ACO, fair_bid, qty))
-                    bvol += qty
+                best_bid = max(book.buy_orders) if has_bids else None
+                best_ask = min(book.sell_orders) if has_asks else None
 
-            # ── MAKE: intelligent quote placement ──
-            asks_above = [p for p in od.sell_orders if p > fair + ACO_DISREGARD_EDGE]
-            bids_below = [p for p in od.buy_orders if p < fair - ACO_DISREGARD_EDGE]
+                # Liquidation tracking (self-position-limit detection)
+                self.aco_liq.append(abs(pos) == ACO_LIMIT)
+                if len(self.aco_liq) > ACO_LIQUIDATION_WINDOW:
+                    self.aco_liq = self.aco_liq[-ACO_LIQUIDATION_WINDOW:]
+                soft = (len(self.aco_liq) == ACO_LIQUIDATION_WINDOW
+                        and sum(self.aco_liq) >= 5 and self.aco_liq[-1])
+                hard = (len(self.aco_liq) == ACO_LIQUIDATION_WINDOW
+                        and all(self.aco_liq))
 
-            best_ask_out = min(asks_above) if asks_above else None
-            best_bid_out = max(bids_below) if bids_below else None
+                # Position-dependent aggression
+                max_buy = fv_int if pos <= ACO_AGGRESSION_THRESHOLD else fv_int - 1
+                min_sell = fv_int if pos >= -ACO_AGGRESSION_THRESHOLD else fv_int + 1
 
-            # Default posting prices
-            ask_px = round(fair + ACO_DEFAULT_EDGE)
-            if best_ask_out is not None:
-                if (best_ask_out - fair) <= ACO_JOIN_EDGE:
-                    ask_px = best_ask_out  # join
-                else:
-                    ask_px = best_ask_out - 1  # penny
+                # TAKE: buy asks at/below FV
+                if has_asks:
+                    for price, vol in sorted(book.sell_orders.items()):
+                        if buy_cap > 0 and price <= max_buy:
+                            qty = min(buy_cap, -vol)
+                            orders.append(Order(ACO, price, qty))
+                            buy_cap -= qty
 
-            bid_px = round(fair - ACO_DEFAULT_EDGE)
-            if best_bid_out is not None:
-                if (fair - best_bid_out) <= ACO_JOIN_EDGE:
-                    bid_px = best_bid_out  # join
-                else:
-                    bid_px = best_bid_out + 1  # penny
+                # TAKE: sell bids at/above FV
+                if has_bids:
+                    for price, vol in sorted(book.buy_orders.items(), reverse=True):
+                        if sell_cap > 0 and price >= min_sell:
+                            qty = min(sell_cap, vol)
+                            orders.append(Order(ACO, price, -qty))
+                            sell_cap -= qty
 
-            # Position-dependent skew (3-tier)
-            skew = 0
-            if abs(pos) > ACO_HARD_LIMIT:
-                skew = 2
-            elif abs(pos) > ACO_SOFT_LIMIT:
-                skew = 1
-            if pos > 0:
-                ask_px -= skew  # tighten ask to sell faster
-            elif pos < 0:
-                bid_px += skew  # tighten bid to buy faster
+                # Liquidation orders
+                if buy_cap > 0 and hard:
+                    orders.append(Order(ACO, fv_int, buy_cap // 2))
+                    buy_cap -= buy_cap // 2
+                if buy_cap > 0 and soft:
+                    orders.append(Order(ACO, fv_int - 2, buy_cap // 2))
+                    buy_cap -= buy_cap // 2
+                if sell_cap > 0 and hard:
+                    orders.append(Order(ACO, fv_int, -(sell_cap // 2)))
+                    sell_cap -= sell_cap // 2
+                if sell_cap > 0 and soft:
+                    orders.append(Order(ACO, fv_int + 2, -(sell_cap // 2)))
+                    sell_cap -= sell_cap // 2
 
-            if bid_px >= ask_px:
-                ask_px = bid_px + 1
+                # POST: best±1 with one-sided book handling
+                if has_bids and has_asks:
+                    if buy_cap > 0:
+                        bp = min(fv_int - 1, best_bid + 1, best_ask - 1)
+                        orders.append(Order(ACO, bp, buy_cap))
+                    if sell_cap > 0:
+                        ap = max(fv_int + 1, best_ask - 1, best_bid + 1)
+                        orders.append(Order(ACO, ap, -sell_cap))
+                elif has_bids:
+                    if buy_cap > 0:
+                        bp = min(fv_int - 1, best_bid + 1)
+                        orders.append(Order(ACO, bp, buy_cap))
+                    if sell_cap > 0:
+                        orders.append(Order(ACO, fv_int + 1, -sell_cap))
+                elif has_asks:
+                    if sell_cap > 0:
+                        ap = max(fv_int + 1, best_ask - 1)
+                        orders.append(Order(ACO, ap, -sell_cap))
+                    if buy_cap > 0:
+                        orders.append(Order(ACO, fv_int - 1, buy_cap))
 
-            buy_qty = limit - (pos + bvol)
-            sell_qty = limit + (pos - svol)
-
-            if buy_qty > 0:
-                orders.append(Order(ACO, round(bid_px), buy_qty))
-            if sell_qty > 0:
-                orders.append(Order(ACO, round(ask_px), -sell_qty))
-
-            result[ACO] = orders
+                result[ACO] = orders
 
         # ═══════════════════════════════════════════════════
         # INTARIAN_PEPPER_ROOT — Regression FV + carry signal
@@ -319,6 +309,7 @@ class Trader:
 
         return result, conversions, json.dumps(
             {"m": self.ipr_mp, "f": self.ipr_tf,
-             "b": self.ipr_pb, "c": round(self.ipr_carry, 3)},
+             "b": self.ipr_pb, "c": round(self.ipr_carry, 3),
+             "l": self.aco_liq},
             separators=(",", ":")
         )
