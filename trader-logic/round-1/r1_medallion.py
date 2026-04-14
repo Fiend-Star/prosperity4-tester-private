@@ -52,11 +52,11 @@ ACO = "ASH_COATED_OSMIUM"
 ACO_LIMIT = 80
 ACO_FV = 10000
 ACO_TAKE_VOL_FILTER = 10   # Only take L1 when vol < this (adverse selection filter)
-ACO_DISREGARD_EDGE = 1     # Ignore quotes within 1 tick of FV
-ACO_JOIN_EDGE = 2           # Join quotes within 2 ticks of FV
-ACO_DEFAULT_EDGE = 4        # Default posting width when no joinable quote
-ACO_SOFT_LIMIT = 40         # Start skewing at |pos| > 40
-ACO_HARD_LIMIT = 60         # Aggressive skewing at |pos| > 60
+ACO_DISREGARD_EDGE = 0     # Consider all quotes for join/penny logic
+ACO_JOIN_EDGE = 5           # Join quotes within 5 ticks of FV (wider = less pennying)
+ACO_DEFAULT_EDGE = 2        # Tight posting when no joinable quote
+ACO_SOFT_LIMIT = 40         # Start mild skewing at |pos| > 40
+ACO_HARD_LIMIT = 80         # Never aggressively skew (trust FV=10000)
 
 
 class Trader:
@@ -65,7 +65,6 @@ class Trader:
         self.ipr_tf = []
         self.ipr_pb = None
         self.ipr_carry = 0.0
-        pass  # ACO is stateless (no liquidation tracker needed with clear step)
 
     def bid(self):
         return 15
