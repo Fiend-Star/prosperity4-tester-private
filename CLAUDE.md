@@ -36,6 +36,20 @@ python -m prosperity4bt trader-logic/round-0/trader.py 0 --ticks 10000
 
 Output logs go to `backtests/<timestamp>.log`.
 
+## Game Engine Tick Sequence (from chrispyroberts/imc-prosperity-4 Rust source)
+
+Per tick, the IMC engine executes in THIS order:
+1. **Fresh books generated** — MM bot posts new quotes (not carried from previous tick)
+2. **Strategy called** — `run(state)` receives current book, returns orders
+3. **Strategy aggressive takes execute** — orders that cross the book fill immediately
+4. **Unfilled orders become passive levels** — inserted into the live book with `LevelOwner::Strategy`
+5. **Taker arrives** — market order hits ALL levels by price priority (bot AND strategy)
+6. **Tick ends** — passive orders DISCARDED, not carried to next tick
+
+**Position limits: ALL-OR-NOTHING.** If buy_qty + position > 80, the ENTIRE product's orders are rejected.
+
+**Taker fills our passive orders** in Step 5 if our price is the best. This is the mechanism for the 59 "invisible taker" fills in ACO — our best±1 posting creates the effective best, and takers hit it.
+
 ## Simulation Mechanics (Confirmed by IMC + website log analysis)
 
 - Full trading day = **10,000 rows** per product (timestamps 0-999,900, step 100ms)
@@ -526,14 +540,33 @@ INTERCEPT = 215-387 (varies by day — absorbed by FV ~10000)
 # Coef sum = 0.96-0.98 (not quite 1.0 → slight mean-reversion)
 ```
 
-### Round 1 Website Scores
+### Round 1 Website Scores (16 submissions)
 
 | Strategy | Score | IPR | ACO | Key |
 |----------|-------|-----|-----|-----|
-| r1_medallion | **5,229** | 2,138 | **3,091** | **BEST** — basic + ACO one-sided handling |
-| trader (basic) | 4,934 | 2,138 | 2,796 | Baseline: regression MM + FV=10000 MM |
+| r1_medallion bias=6 probe | **10,467.8** | **7,377** | 3,091 | **BEST** — drift bias=6 |
+| r1_medallion bias=5 (baseline) | **10,444.8** | 7,354 | 3,091 | Drift bias=5, proven stable |
+| r1_medallion cleaned (bias=6) | 10,428.8 | 7,338 | 3,091 | Cleaned code, 35 fills (2 fewer) |
+| TROLL ACO (take/clear/make) | 10,435.4 | 7,354 | 3,081 | ACO framework = marginal loss |
+| ACO swept params | 10,312.6 | 7,354 | 2,959 | BT gradient WRONG for ACO |
+| probe1 no-take ACO | 9,986.9 | 7,354 | 2,633 | ACO takes worth 458 |
+| probe2 wide ACO (FV±3) | 10,444.8 | 7,354 | 3,091 | IDENTICAL — posting width = zero effect |
+| probe3 no-liq ACO | 10,444.8 | 7,354 | 3,091 | Liq tracker = dead code at 1k |
+| probe4 state logger | 10,444.8 | 7,354 | 3,091 | No hidden observations or conversions |
+| probe5 conversion +1 | 10,444.8 | 7,354 | 3,091 | Conversions DISABLED for R1 |
+| probe6 conversion -1 | 10,444.8 | 7,354 | 3,091 | Conversions DISABLED for R1 |
+| probe7 multi-level ACO | 10,444.8 | 7,354 | 3,091 | Multi-level = zero effect |
+| r1_medallion v1 (no drift) | 5,229.0 | 2,138 | 3,091 | Pre-drift baseline |
+| trader (basic) | 4,933.8 | 2,138 | 2,796 | Original basic trader |
 
-**Entire +295 delta is from ACO one-sided book handling.** IPR identical (2,138 both). Posting on the missing side when MM has one-sided book = sole liquidity provider = captures taker flow that basic trader skips.
+**Key findings from 16 submissions:**
+- ACO fills are STRATEGY-INDEPENDENT: 101 fills, 3,091 PnL across 12 of 16 runs (identical)
+- ACO posting width has ZERO effect (FV±3 = identical to best±1)
+- Conversions are DISABLED for Round 1
+- No hidden observations/state data available
+- IPR drift bias is the ENTIRE strategy (35% of total PnL)
+- Trade flow, OBI, carry signal = 0% marginal PnL (ablation-confirmed)
+- Gap to #1 (11,744) is likely seed variance, not missing alpha
 
 ### Round 1 Backtester Cross-Validation (4 Backtesters)
 
@@ -566,31 +599,33 @@ All tested on same CSV data, day 0, 1k ticks:
 
 **r1_medallion.py** (Current Best: Website 5,229):
 
-**INTARIAN_PEPPER_ROOT** (s36_medallion architecture):
-- Microprice 4-lag regression: uniform coefs [0.25, 0.25, 0.24, 0.26], intercept ~0.2
-- Trade flow signal (coef=1.5, window=5, norm=15)
-- L1/L2 OBI shift (+0.5)
-- Carry signal: directional posting after ±4 bid moves (decay 0.7)
-- Position aggression at |pos| > 40
-- Terminal flattening at ts > 900k (full-day only, never fires on 1k tutorial)
+**INTARIAN_PEPPER_ROOT** (drift capture, website 7,377):
+- Microprice 4-lag regression FV (uniform coefs ~0.25, 0.5% of PnL)
+- Drift bias: FV += 6.0 (35% of TOTAL PnL, the entire strategy)
+- Asymmetric takes: buy at FV+2, sell only at FV+3 (1.3% of PnL)
+- One-sided book handling (9% of ticks)
+- **Dead signals kept for traderData format**: trade flow, OBI, carry (0% PnL each, ablation-confirmed)
+- No terminal flattening (drift makes selling anti-alpha)
 
-**ASH_COATED_OSMIUM** (proven EMERALDS architecture):
-- Fixed FV = 10000 (no OBI shift — doesn't help ACO)
-- Take at FV, post at best±1
-- Liquidation tracking (10-tick window, soft/hard)
-- Position-dependent aggression at |pos| > 40
-- **One-sided book handling**: post on missing side at FV±1 (sole liquidity = +295 website PnL)
-- No terminal flatten (inventory carry is +EV, same lesson as EMERALDS)
+**ASH_COATED_OSMIUM** (passive MM, website 3,091):
+- Fixed FV = 10000, take at FV, post at best±1
+- 101 fills/1000 ticks: 59 strategy-independent + 38 book takes + 4 one-sided
+- Posting width has ZERO effect (probe-confirmed: FV±3 = identical to best±1)
+- Position-limit tracker (10-tick window, soft/hard — never fires on 1k tutorial)
+- Position-dependent take aggression at |pos| > 40
 
-### Round 1 Critical Lessons
+### Round 1 Critical Lessons (from 16 website submissions + 10 probe analyses)
 
-1. **One-sided book handling = +295 PnL** — posting when MM has only bids or only asks captures taker flow the basic trader skips entirely. This is 6% of total PnL.
-2. **IPR signals (OBI, carry, trade flow) have ZERO website effect** — identical to Round 0 ceiling behavior. The 2,138 IPR score is identical for basic and medallion.
-3. **ACO O-U directional posting is CATASTROPHIC on full days** — builds massive inventory that doesn't revert. -161k on day 0 full. Removed from medallion.
-4. **Terminal flattening hurts on full days** — selling at market bid (FV-8) to flatten costs 640+ per flatten. Same Round 0 lesson: inventory reduction = anti-alpha.
-5. **CSV ≠ website is SEVERE for Round 1** (36% match vs Round 0's 100%). Backtester is structurally useful only.
-6. **Website tutorial is 1000 ticks** (not 2000 like Round 0). Confirmed from god logger activity log.
-7. **All 4 backtesters agree on relative ranking** — independent validation that our matching logic is correct (Rust backtester produces identical scores).
+1. **Drift bias = 35% of total PnL** — FV += 6.0 is the entire IPR strategy. Buy 80 units in first 7 ticks, hold for drift carry.
+2. **Trade flow, OBI, carry = 0% marginal PnL each** — ablation-confirmed on calibrated backtester. Kept in traderData for format compatibility only.
+3. **ACO fills are STRATEGY-INDEPENDENT** — 59 of 101 fills are "invisible takers" attracted by any inside-spread posting. Count is constant across 12 submissions.
+4. **ACO posting width has ZERO effect** — probe: FV±3 and best±1 produce byte-identical fills and PnL.
+5. **Conversions are DISABLED for Round 1** — probes: conversions=+1 and -1 both produce identical results to conversions=0.
+6. **No hidden observations** — probe: state.observations.plainValueObservations={}, conversionObservations=EMPTY.
+7. **Backtester calibration: imc mode with extra_rate=0.064** matches website within 1.6% for ACO. Use `--match-mode imc`.
+8. **CSV ≠ website (36% match)** — backtester is for ranking only. IPR is 99.8% accurate in strict mode, ACO needs calibrated imc mode.
+9. **Gap to #1 (11,744 vs 10,468) is likely seed variance** — theoretical max ~10,651 is below #1. No unexploited mechanism found after exhaustive probing.
+10. **traderData format matters** — removing unused state variables from JSON caused 2 fewer IPR fills (-39 PnL). Keep all fields.
 
 ### Round 1 File Organization
 

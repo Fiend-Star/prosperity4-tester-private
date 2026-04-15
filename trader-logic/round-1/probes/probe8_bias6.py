@@ -36,9 +36,6 @@ ACO_LIQUIDATION_WINDOW = 10
 class Trader:
     def __init__(self):
         self.ipr_mp = []
-        self.ipr_tf = []  # kept for traderData format compatibility
-        self.ipr_pb = None
-        self.ipr_carry = 0.0
         self.aco_liq = []
 
     def bid(self):
@@ -48,9 +45,6 @@ class Trader:
         saved = json.loads(state.traderData) if state.traderData else None
         if saved:
             self.ipr_mp = saved.get("m", [])
-            self.ipr_tf = saved.get("f", [])
-            self.ipr_pb = saved.get("b")
-            self.ipr_carry = saved.get("c", 0.0)
             self.aco_liq = saved.get("l", [])
 
         result = {}
@@ -204,8 +198,6 @@ class Trader:
                 result[IPR] = orders
 
         return result, conversions, json.dumps(
-            {"m": self.ipr_mp, "f": self.ipr_tf,
-             "b": self.ipr_pb, "c": round(self.ipr_carry, 3),
-             "l": self.aco_liq},
+            {"m": self.ipr_mp, "l": self.aco_liq},
             separators=(",", ":")
         )
