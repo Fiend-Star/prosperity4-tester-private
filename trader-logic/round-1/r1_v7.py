@@ -8,8 +8,9 @@ Combines the two backtester-validated improvements:
 - IPR wall-mid FV (from r1_v6b, +4,328 on backtester full days)
 - IPR trend-reversal guardrail (from r1_v5, safety on regime changes)
 
-Rejects r1_v6 (ACO wall-mid) — fixed FV=10000 is structurally correct for ACO,
-wall-mid produces −10k regression on backtester.
+Keeps ACO on fixed FV=10000. NOTE: the earlier r1_v6 "wall-mid −10k regression"
+was a `_wall_mid` ask-side bug (min-by-abs picked the SHALLOWEST ask).
+Fixed in-place 2026-04-17. Bug-fixed ACO wall-mid is a net gain; see r1_v7_fullwm.py.
 
 ACO: unchanged from r1_v4 (LU framework with fixed FV=10000).
 """
@@ -46,7 +47,7 @@ def _wall_mid(book, fallback):
     if not (book.buy_orders and book.sell_orders):
         return fallback
     deep_bid = max(book.buy_orders, key=lambda p: book.buy_orders[p])
-    deep_ask = min(book.sell_orders, key=lambda p: abs(book.sell_orders[p]))
+    deep_ask = max(book.sell_orders, key=lambda p: abs(book.sell_orders[p]))
     return (deep_bid + deep_ask) / 2.0
 
 

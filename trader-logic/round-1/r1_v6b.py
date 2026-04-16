@@ -36,7 +36,7 @@ def _wall_mid(book, fallback):
     if not (book.buy_orders and book.sell_orders):
         return fallback
     deep_bid = max(book.buy_orders, key=lambda p: book.buy_orders[p])
-    deep_ask = min(book.sell_orders, key=lambda p: abs(book.sell_orders[p]))
+    deep_ask = max(book.sell_orders, key=lambda p: abs(book.sell_orders[p]))
     return (deep_bid + deep_ask) / 2.0
 
 
