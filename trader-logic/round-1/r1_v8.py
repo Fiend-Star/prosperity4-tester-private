@@ -143,30 +143,23 @@ class Trader:
             mid = (best_bid + best_ask) * 0.5
             fv_int = round(mid + IPR_DRIFT_BIAS)
 
-            # Asymmetric takes (unchanged from v4)
-            for price, vol in sorted(book.sell_orders.items()):
-                if buy_cap > 0 and price <= fv_int + IPR_BUY_SLACK:
-                    qty = min(buy_cap, -vol)
-                    orders.append(Order(IPR, price, qty))
-                    buy_cap -= qty
+            # Nancy's single-order pattern: one BUY order at fv+slack takes visible asks
+            # AND leaves remainder as resting bid at that price. Her trick is that the
+            # backtester/website fills the visible portion at the ask price (12006) and
+            # parks the rest at the order's own price (same 12006 = inside spread).
+            if buy_cap > 0:
+                aggr_price = min(fv_int + IPR_BUY_SLACK, best_ask)
+                orders.append(Order(IPR, aggr_price, buy_cap))
 
+            # Sell side: take only if bid >> fv (asymmetric, v4 logic)
             for price, vol in sorted(book.buy_orders.items(), reverse=True):
                 if sell_cap > 0 and price >= fv_int + IPR_SELL_SLACK:
                     qty = min(sell_cap, vol)
                     orders.append(Order(IPR, price, -qty))
                     sell_cap -= qty
 
-            # CHANGED (Nancy-inspired): aggressive passive bid INSIDE the spread
-            # v4 posted at min(fv-1, best_bid+1, best_ask-1) = ~11992 — rarely fills
-            # v8 posts at min(fv+slack, best_ask-1) = ~12005 — inside spread, still above ask-1
-            if buy_cap > 0:
-                bid_price = min(fv_int + IPR_BUY_SLACK, best_ask - 1)
-                orders.append(Order(IPR, bid_price, buy_cap))
-
-            # CHANGED (Nancy-inspired): only post ask when fully long OR heavily long
-            # Reason: while accumulating, posting ask risks selling our long position
-            # back into the same tick's taker flow. Nancy doesn't post ask until pos==80.
-            # Our compromise: post ask only if pos >= SOFT_LIMIT (40), always at fv+IPR_SELL_SLACK.
+            # Only post ask when we have significant long inventory (Nancy's pattern).
+            # Avoids selling our accumulation before drift plays out.
             if sell_cap > 0 and pos >= SOFT_LIMIT:
                 orders.append(Order(IPR, max(fv_int + IPR_SELL_SLACK, best_ask - 1, best_bid + 1), -sell_cap))
 
