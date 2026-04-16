@@ -537,30 +537,37 @@ INTERCEPT = 215-387 (varies by day — absorbed by FV ~10000)
 # Coef sum = 0.96-0.98 (not quite 1.0 → slight mean-reversion)
 ```
 
-### Round 1 Website Scores (22+ submissions, updated 2026-04-17)
+### Round 1 Website Scores (25+ submissions, updated 2026-04-17)
 
-| Strategy | Score | IPR | ACO | Key |
-|----------|-------|-----|-----|-----|
-| **r1_v4** (213352) | **10,624.84** | **7,446** | **3,179** | **CURRENT BEST** — r1_v2 IPR + LU ACO |
-| r1_v2 (211338) | 10,536.81 | 7,446 | 3,091 | Simple mid + drift_bias=5 (via 210525 probe discovery) |
-| r1_medallion bias=6 | 10,467.8 | 7,377 | 3,091 | Previous best, microprice regression + drift=6 |
-| r1_medallion bias=5 | 10,444.8 | 7,354 | 3,091 | Drift bias=5, proven stable |
-| TROLL ACO | 10,435.4 | 7,354 | 3,081 | Their take/clear/make attempt |
-| ACO swept params | 10,312.6 | 7,354 | 2,959 | BT gradient WRONG for ACO |
-| r1_hybrid (207789/208196/210055) | **10,106-10,107** | 7,016-7,446 | 3,091-3,179 | Seed-detection — byte-identical across 3 submits, NO improvement |
-| probe1 no-take ACO | 9,986.9 | 7,354 | 2,633 | ACO takes worth 458 |
-| r1_v3 (212392) | **7,974.84** | **4,796** | 3,179 | **LU framework on IPR = REGRESSION** |
-| r1_medallion v1 (no drift) | 5,229.0 | 2,138 | 3,091 | Pre-drift baseline |
-| trader (basic) | 4,933.8 | 2,138 | 2,796 | Original basic trader |
+| Strategy | Submission | Score | IPR | ACO | Key |
+|----------|------------|------:|----:|----:|-----|
+| Nancy's algov4 (benchmark) | 228959 | **10,734.03** | 7,496 | 3,238 | Teammate reference — +109 over our best |
+| **r1_v4** | 213352 | **10,624.84** | **7,446** | **3,179** | **OUR CURRENT BEST** — r1_v2 IPR + LU ACO |
+| r1_v5 (guardrail) | 228366 | 10,612.84 | 7,434 | 3,179 | Nancy-inspired trend detector — neutral −12 |
+| r1_v2 | 211338 | 10,536.81 | 7,446 | 3,091 | Simple mid + drift_bias=5 (via 210525 probe) |
+| r1_medallion bias=6 | 134926 | 10,467.8 | 7,377 | 3,091 | Previous best, microprice regression |
+| r1_v7 (guardrail + wall-mid) | 228024 | 10,465.84 | 7,287 | 3,179 | REGRESSION −159, delayed entry trap |
+| r1_medallion bias=5 | baseline | 10,444.8 | 7,354 | 3,091 | Drift bias=5, proven stable |
+| TROLL ACO | — | 10,435.4 | 7,354 | 3,081 | Their take/clear/make attempt |
+| ACO swept params | — | 10,312.6 | 7,354 | 2,959 | BT gradient WRONG for ACO |
+| r1_hybrid (×3) | 207789/208196/210055 | **10,106-10,107** | 7,016-7,446 | 3,091-3,179 | Seed-detection — byte-identical, NO improvement |
+| probe1 no-take ACO | — | 9,986.9 | 7,354 | 2,633 | ACO takes worth 458 |
+| r1_v3 | 212392 | **7,974.84** | **4,796** | 3,179 | **LU framework on IPR = REGRESSION** |
+| r1_medallion v1 (no drift) | — | 5,229.0 | 2,138 | 3,091 | Pre-drift baseline |
+| trader (basic) | 105087 | 4,933.8 | 2,138 | 2,796 | Original basic trader |
 
 **Key findings (2026-04-17 update):**
-- **Simple mid beats microprice for IPR** (v2 discovery via 210525 probe): microprice leans LOW in ask-heavy books, missing initial take at 12006. Simple mid + drift_bias=5 catches it.
-- **LU clear step = +88 for ACO** (theory: +3% × 3,091 = +87, actual: +88). First validated alpha beyond 10,468.
-- **LU framework BREAKS drift products** (v3): take_width=1 assumes present-value FV. IPR regressed -2,650 with LU on IPR.
-- **Drawdowns are entry-cost, not bugs** — r1_hybrid with 0 drawdown scored 10,107 (-429 vs medallion). Eliminating drawdown = entering later = paying more.
-- Seed detection works but hardcoded orders DON'T FILL (no taker sells for IPR during drawdown).
-- **Practical ceiling ~10,625**. TROLL (competitor) also stuck at ~10,600 with 14+ params via different approach.
-- Gap to #1 (11,744) likely seed variance, not alpha we're missing.
+- **Simple mid beats microprice for IPR** (v2 discovery via 210525 probe)
+- **LU clear step = +88 for ACO** (theory: +3% × 3,091 = +87, actual: +88)
+- **LU framework BREAKS drift products** (v3 regressed −2,650 IPR)
+- **Drawdowns are entry-cost, not bugs** (r1_hybrid, r1_v7 both regress)
+- **Nancy's rolling-slope + direction-history guardrail is structurally sound** — our r1_v5 adopts the mechanism with conservative asymmetric thresholds (0.55/0.35 vs her symmetric 0.5)
+- **r1_v5 multi-seed synthetic validation**: beats r1_v4 on 16/16 seed×regime combos (+15k uptrend, +20k flat, +28k downtrend, +23k reversal)
+- **r1_v5 website cost is noise** (−12 vs v4, buys real downtrend insurance)
+- **Nancy's OU ACO model is NOT adopted** — 9 tuned params, her +59 ACO edge likely seed variance
+- **r1_v8 (Nancy bid placement port) failed to port** — self-wash bug, BT regression persists after fix
+- **Practical website ceiling ~10,625-10,734**. TROLL at 10.6k, us at 10.625, Nancy at 10.734
+- Submission framework: r1_v4 for max-PnL uptrend, r1_v5 for regime insurance
 
 ### Round 1 Backtester Cross-Validation (4 Backtesters)
 
@@ -637,24 +644,50 @@ All tested on same CSV data, day 0, 1k ticks:
 
 ```
 trader-logic/round-1/
-├── r1_v4.py                             # CURRENT BEST (website 10,624.84) — r1_v2 IPR + LU ACO
-├── r1_v2.py                             # Previous best (website 10,536.81) — simple mid + drift
-├── r1_v3.py                             # Failed LU-on-IPR attempt (website 7,974.84)
-├── r1_hybrid.py                         # Seed-detection experiment (website 10,106-10,107, no improvement)
-├── r1_medallion.py                      # Older baseline (website 10,467.8) — microprice regression
-├── r1_troll.py                          # Competitor's strategy (14+ params) for comparison
-├── trader.py                            # Basic combined trader (website 4,934)
-├── template_*.py                        # Archetype templates (stable/random_walk/basket/options/etc)
+├── r1_v4.py                             # CURRENT BEST (website 10,624.84)
 ├── refit_regression.py                  # Utility: auto-refit microprice regression
-└── analysis_round1.py                   # Product analysis script
+├── BACKTEST_COMMANDS.md                 # Canonical backtest command reference
+├── README.md                            # Strategy evolution table + directory map
+├── best/                                # Archival best + rationale
+│   ├── r1_v4.py
+│   └── README.md
+├── experiments/                         # Failed/abandoned experiments (lessons)
+│   ├── r1_v3.py                         # LU framework on IPR (website 7,974)
+│   ├── r1_hybrid.py                     # Seed-detection (3 × 10,106)
+│   ├── r1_adaptive.py                   # Drift-adaptive variant
+│   ├── r1_medallion_dp.py               # DP experiment
+│   ├── synthetic/                       # Regime stress-test framework
+│   │   ├── generate.py                  # CSV generator (4 regimes)
+│   │   └── run_all.py                   # Multi-seed comparator
+│   └── README.md
+├── early_versions/                      # Superseded baselines (useful for ablations)
+│   ├── trader.py, r1_medallion.py, r1_v2.py
+│   └── README.md
+├── templates/                           # Per-archetype starters (Round 2+ scaffolding)
+│   └── template_{stable,random_walk,basket,options,conversion,olivia}.py
+├── references/                          # Competitor / teammate code for study
+│   ├── nancy_algov4.py                  # Nancy's 10,734 submission (guardrail source)
+│   ├── superduperbread_round1_26.py     # Teammate's 10,400
+│   ├── r1_troll.py                      # Competitor TROLL's ~10.6k
+│   └── README.md
+├── r1_v5.py                             # Guardrail variant (website 10,612.84)
+├── r1_v6.py, r1_v6b.py, r1_v7.py, r1_v8.py  # Test variants (see experiments/ for results)
+├── probes/                              # Historical probe submissions
+└── oracle/                              # God-logger + AWS Lambda probes
+
+prosperity4bt/resources/round99/        # Synthetic regime test data (generate.py output)
+├── prices_round_99_day_{0,1,2,3}.csv   # 10k ticks × 4 regimes
+└── trades_round_99_day_{0,1,2,3}.csv
 
 run-logs/round-1/
-├── god-logger-run/103917/               # Clean book (zero orders) — website day 0 pristine data
-├── 134926/                              # r1_medallion best run — website 10,467.8
-├── 210525/                              # PROBE that accidentally found simpler-mid alpha → v2
-├── 211338/                              # r1_v2 run — website 10,536.81
-├── 212392/                              # r1_v3 regression analysis
-└── 213352/                              # r1_v4 CURRENT BEST — website 10,624.84
+├── god-logger-run/103917/               # Clean book (zero orders)
+├── 134926/                              # r1_medallion best — website 10,467.8
+├── 210525/                              # Probe that found simpler-mid alpha → v2
+├── 211338/                              # r1_v2 — website 10,536.81
+├── 213352/                              # r1_v4 CURRENT BEST — 10,624.84
+├── 228024/                              # r1_v7 — 10,465.84 (regression)
+├── 228366/                              # r1_v5 — 10,612.84 (neutral)
+└── 228959/                              # Nancy's algov4 benchmark — 10,734.03
 ```
 
 ### Reference Backtesters (Round 1 Validated)
