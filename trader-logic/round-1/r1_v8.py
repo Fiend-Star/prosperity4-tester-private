@@ -159,14 +159,16 @@ class Trader:
             # CHANGED (Nancy-inspired): aggressive passive bid INSIDE the spread
             # v4 posted at min(fv-1, best_bid+1, best_ask-1) = ~11992 — rarely fills
             # v8 posts at min(fv+slack, best_ask-1) = ~12005 — inside spread, still above ask-1
-            # CRITICAL: best_ask-1 (not best_ask) to avoid self-wash with our post ask
             if buy_cap > 0:
                 bid_price = min(fv_int + IPR_BUY_SLACK, best_ask - 1)
                 orders.append(Order(IPR, bid_price, buy_cap))
 
-            # Sell side unchanged (defensive, don't sell during drift)
-            if sell_cap > 0:
-                orders.append(Order(IPR, max(fv_int + 2, best_ask - 1, best_bid + 1), -sell_cap))
+            # CHANGED (Nancy-inspired): only post ask when fully long OR heavily long
+            # Reason: while accumulating, posting ask risks selling our long position
+            # back into the same tick's taker flow. Nancy doesn't post ask until pos==80.
+            # Our compromise: post ask only if pos >= SOFT_LIMIT (40), always at fv+IPR_SELL_SLACK.
+            if sell_cap > 0 and pos >= SOFT_LIMIT:
+                orders.append(Order(IPR, max(fv_int + IPR_SELL_SLACK, best_ask - 1, best_bid + 1), -sell_cap))
 
         else:
             if has_bids and not has_asks:
