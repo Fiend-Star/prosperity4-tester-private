@@ -8,33 +8,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Set PYTHONPATH if you get "No module named 'datamodel'"
 $env:PYTHONPATH="c:\Users\gurms\PycharmProjects\imc-prosperity-4-backtester\prosperity4bt"
 
-# Run on all days in a round
-python -m prosperity4bt trader-logic/round-0/trader.py 0
+# Current best Round 1 strategy
+python -m prosperity4bt trader-logic/round-1/r1_v4.py 1
 
 # Run specific round-day
-python -m prosperity4bt trader-logic/round-0/trader.py 0--1
+python -m prosperity4bt trader-logic/round-1/r1_v4.py 1--1
 
-# Simulate WEBSITE test conditions (run() every tick, same as website)
-# Day 0 CSV has 2000 ticks — website calls run() on ALL 2000 (confirmed from logs)
-# Days -1/-2 CSV have 10000 ticks — use --ticks 2000 to match website test window
-python -m prosperity4bt trader-logic/round-0/trader.py 0--0 --ticks 2000
+# Tutorial test conditions (1k ticks for Round 1, 2k for Round 0 — run() every tick like website)
+python -m prosperity4bt trader-logic/round-1/r1_v4.py 1 --ticks 1000
+python -m prosperity4bt trader-logic/round-0/trader.py 0 --ticks 2000
 
-# For days -1/-2 (10k tick CSVs), limit to 2k ticks for website-comparable scores
-python -m prosperity4bt trader-logic/round-0/trader.py 0--1 --ticks 2000
-
-# Simulate FINAL SCORING conditions (10k ticks, every tick)
-python -m prosperity4bt trader-logic/round-0/trader.py 0 --ticks 10000
+# Full-day competition scoring (10k ticks)
+python -m prosperity4bt trader-logic/round-1/r1_v4.py 1 --ticks 10000
 
 # Key flags
 #   --iterations N                     run() called N times per day (resting orders between)
 #   --ticks N                          max ticks to simulate
 #   --match-trades {all|worse|none}    trade matching mode (default: all)
+#   --match-mode {default|imc|sim|website}  ACO calibration — use 'imc' for ±1.6% match
 #   --no-out                           skip saving .log file
 #   --no-progress                      hide progress bars
 #   --print                            show trader stdout
 ```
 
-Output logs go to `backtests/<timestamp>.log`.
+Output logs go to `backtests/<timestamp>.log`. Round sizes: Round 0 tutorial = 2k ticks, Round 1 tutorial = 1k ticks, full days = 10k ticks.
 
 ## Game Engine Tick Sequence (from chrispyroberts/imc-prosperity-4 Rust source)
 
@@ -540,33 +537,30 @@ INTERCEPT = 215-387 (varies by day — absorbed by FV ~10000)
 # Coef sum = 0.96-0.98 (not quite 1.0 → slight mean-reversion)
 ```
 
-### Round 1 Website Scores (16 submissions)
+### Round 1 Website Scores (22+ submissions, updated 2026-04-17)
 
 | Strategy | Score | IPR | ACO | Key |
 |----------|-------|-----|-----|-----|
-| r1_medallion bias=6 probe | **10,467.8** | **7,377** | 3,091 | **BEST** — drift bias=6 |
-| r1_medallion bias=5 (baseline) | **10,444.8** | 7,354 | 3,091 | Drift bias=5, proven stable |
-| r1_medallion cleaned (bias=6) | 10,428.8 | 7,338 | 3,091 | Cleaned code, 35 fills (2 fewer) |
-| TROLL ACO (take/clear/make) | 10,435.4 | 7,354 | 3,081 | ACO framework = marginal loss |
+| **r1_v4** (213352) | **10,624.84** | **7,446** | **3,179** | **CURRENT BEST** — r1_v2 IPR + LU ACO |
+| r1_v2 (211338) | 10,536.81 | 7,446 | 3,091 | Simple mid + drift_bias=5 (via 210525 probe discovery) |
+| r1_medallion bias=6 | 10,467.8 | 7,377 | 3,091 | Previous best, microprice regression + drift=6 |
+| r1_medallion bias=5 | 10,444.8 | 7,354 | 3,091 | Drift bias=5, proven stable |
+| TROLL ACO | 10,435.4 | 7,354 | 3,081 | Their take/clear/make attempt |
 | ACO swept params | 10,312.6 | 7,354 | 2,959 | BT gradient WRONG for ACO |
+| r1_hybrid (207789/208196/210055) | **10,106-10,107** | 7,016-7,446 | 3,091-3,179 | Seed-detection — byte-identical across 3 submits, NO improvement |
 | probe1 no-take ACO | 9,986.9 | 7,354 | 2,633 | ACO takes worth 458 |
-| probe2 wide ACO (FV±3) | 10,444.8 | 7,354 | 3,091 | IDENTICAL — posting width = zero effect |
-| probe3 no-liq ACO | 10,444.8 | 7,354 | 3,091 | Liq tracker = dead code at 1k |
-| probe4 state logger | 10,444.8 | 7,354 | 3,091 | No hidden observations or conversions |
-| probe5 conversion +1 | 10,444.8 | 7,354 | 3,091 | Conversions DISABLED for R1 |
-| probe6 conversion -1 | 10,444.8 | 7,354 | 3,091 | Conversions DISABLED for R1 |
-| probe7 multi-level ACO | 10,444.8 | 7,354 | 3,091 | Multi-level = zero effect |
+| r1_v3 (212392) | **7,974.84** | **4,796** | 3,179 | **LU framework on IPR = REGRESSION** |
 | r1_medallion v1 (no drift) | 5,229.0 | 2,138 | 3,091 | Pre-drift baseline |
 | trader (basic) | 4,933.8 | 2,138 | 2,796 | Original basic trader |
 
-**Key findings from 16 submissions:**
-- ACO fills are STRATEGY-INDEPENDENT: 101 fills, 3,091 PnL across 12 of 16 runs (identical)
-- ACO posting width has ZERO effect (FV±3 = identical to best±1)
-- Conversions are DISABLED for Round 1
-- No hidden observations/state data available
-- IPR drift bias is the ENTIRE strategy (35% of total PnL)
-- Trade flow, OBI, carry signal = 0% marginal PnL (ablation-confirmed)
-- Gap to #1 (11,744) is likely seed variance, not missing alpha
+**Key findings (2026-04-17 update):**
+- **Simple mid beats microprice for IPR** (v2 discovery via 210525 probe): microprice leans LOW in ask-heavy books, missing initial take at 12006. Simple mid + drift_bias=5 catches it.
+- **LU clear step = +88 for ACO** (theory: +3% × 3,091 = +87, actual: +88). First validated alpha beyond 10,468.
+- **LU framework BREAKS drift products** (v3): take_width=1 assumes present-value FV. IPR regressed -2,650 with LU on IPR.
+- **Drawdowns are entry-cost, not bugs** — r1_hybrid with 0 drawdown scored 10,107 (-429 vs medallion). Eliminating drawdown = entering later = paying more.
+- Seed detection works but hardcoded orders DON'T FILL (no taker sells for IPR during drawdown).
+- **Practical ceiling ~10,625**. TROLL (competitor) also stuck at ~10,600 with 14+ params via different approach.
+- Gap to #1 (11,744) likely seed variance, not alpha we're missing.
 
 ### Round 1 Backtester Cross-Validation (4 Backtesters)
 
@@ -597,55 +591,70 @@ All tested on same CSV data, day 0, 1k ticks:
 
 ### Round 1 Strategy Architecture
 
-**r1_medallion.py** (Current Best: Website 5,229):
+**r1_v4.py** (Current Best: Website **10,624.84**):
 
-**INTARIAN_PEPPER_ROOT** (drift capture, website 7,377):
-- Microprice 4-lag regression FV (uniform coefs ~0.25, 0.5% of PnL)
-- Drift bias: FV += 6.0 (35% of TOTAL PnL, the entire strategy)
-- Asymmetric takes: buy at FV+2, sell only at FV+3 (1.3% of PnL)
+**INTARIAN_PEPPER_ROOT** (drift capture, website **7,446**) — from r1_v2:
+- **Simple mid FV + drift_bias=5** (NOT microprice regression)
+  - `fv = round(mid + 5.0)` where `mid = (best_bid + best_ask) / 2`
+  - Microprice would lean LOW in ask-heavy book, missing initial take
+- Asymmetric takes: buy if price ≤ fv+2, sell only if price ≥ fv+3
+- Post aggressive bid at `min(fv-1, best_bid+1, best_ask-1)`, defensive ask at `max(fv+2, best_ask-1, best_bid+1)`
 - One-sided book handling (9% of ticks)
-- **Dead signals kept for traderData format**: trade flow, OBI, carry (0% PnL each, ablation-confirmed)
-- No terminal flattening (drift makes selling anti-alpha)
+- 4 tunable params (LIMIT, DRIFT_BIAS, BUY_SLACK, SELL_SLACK)
 
-**ASH_COATED_OSMIUM** (passive MM, website 3,091):
-- Fixed FV = 10000, take at FV, post at best±1
-- 101 fills/1000 ticks: 59 strategy-independent + 38 book takes + 4 one-sided
-- Posting width has ZERO effect (probe-confirmed: FV±3 = identical to best±1)
-- Position-limit tracker (10-tick window, soft/hard — never fires on 1k tutorial)
-- Position-dependent take aggression at |pos| > 40
+**ASH_COATED_OSMIUM** (Linear Utility AMETHYSTS port, website **3,179**):
+- Fixed FV = 10000
+- **Take → Clear → Make pipeline** (LU canonical):
+  - Take: buy if ≤ fv-1 (TAKE_WIDTH=1), sell if ≥ fv+1, with adverse_vol<15 filter
+  - Clear: flatten at fv exactly (CLEAR_WIDTH=0) — Linear Utility's +3% trick
+  - Make: penny/join/default posting (DISREGARD=1, JOIN=2, DEFAULT=4)
+- Soft-limit skew: shift 1 tick toward neutral at |pos|>40
+- All params are LU-exact (P2 #2 finish values) — zero backtest tuning
+- +88 validated over baseline ACO (matches theoretical +3%)
 
-### Round 1 Critical Lessons (from 16 website submissions + 10 probe analyses)
+**Overall:** 10 params total, all derived from market structure or copied from validated P2 winner code.
 
-1. **Drift bias = 35% of total PnL** — FV += 6.0 is the entire IPR strategy. Buy 80 units in first 7 ticks, hold for drift carry.
-2. **Trade flow, OBI, carry = 0% marginal PnL each** — ablation-confirmed on calibrated backtester. Kept in traderData for format compatibility only.
-3. **ACO fills are STRATEGY-INDEPENDENT** — 59 of 101 fills are "invisible takers" attracted by any inside-spread posting. Count is constant across 12 submissions.
-4. **ACO posting width has ZERO effect** — probe: FV±3 and best±1 produce byte-identical fills and PnL.
-5. **Conversions are DISABLED for Round 1** — probes: conversions=+1 and -1 both produce identical results to conversions=0.
-6. **No hidden observations** — probe: state.observations.plainValueObservations={}, conversionObservations=EMPTY.
-7. **Backtester calibration: imc mode with extra_rate=0.064** matches website within 1.6% for ACO. Use `--match-mode imc`.
-8. **CSV ≠ website (36% match)** — backtester is for ranking only. IPR is 99.8% accurate in strict mode, ACO needs calibrated imc mode.
-9. **Gap to #1 (11,744 vs 10,468) is likely seed variance** — theoretical max ~10,651 is below #1. No unexploited mechanism found after exhaustive probing.
-10. **traderData format matters** — removing unused state variables from JSON caused 2 fewer IPR fills (-39 PnL). Keep all fields.
+### Round 1 Critical Lessons (22+ submissions, as of 2026-04-17)
+
+1. **Simple mid > microprice for drift products** — r1_v2 discovery via 210525 probe. Microprice volume-weights toward heavier side; in ask-heavy books (bullish) it leans LOW, missing the t=0 ask-take at 12006. Simple mid catches it. +90 PnL.
+2. **Linear Utility clear step = +3% on stable products** — validated on ACO (+88, theory predicted +87). Apply LU framework to AMETHYSTS/ACO-like products; DO NOT apply to drift products.
+3. **LU take_width=1 BREAKS drift products** — r1_v3 regressed IPR by -2,650. LU assumes FV is present-value accurate; drift needs future-value FV.
+4. **Drawdowns are entry-cost, not bugs** — r1_hybrid (passive bids, 0 drawdown) scored -429 vs r1_medallion. Eliminating drawdown = entering later = paying more. Drawdown IS the drift trade entry.
+5. **Seed detection works but doesn't help** — 3 hybrid submissions correctly detected seed match; but hardcoded bids at 11995 never filled (no taker sells at that price during drawdown).
+6. **Drift bias = 35% of total PnL** — FV += 5 is the core IPR alpha.
+7. **Trade flow, OBI, carry = 0% marginal PnL each** — ablation-confirmed. Dropped from r1_v2 onwards.
+8. **ACO fills are STRATEGY-INDEPENDENT** — 59 of 101 fills are "invisible takers" attracted by any inside-spread posting.
+9. **ACO posting width has ZERO effect** — FV±3 = best±1 (byte-identical fills).
+10. **Conversions are DISABLED for Round 1** — probes: conversions=+1 and -1 both identical to 0.
+11. **No hidden observations** — state.observations.plainValueObservations={}, conversionObservations=EMPTY.
+12. **Backtester calibration: imc mode with extra_rate=0.064** matches website within 1.6% for ACO. Use `--match-mode imc`.
+13. **CSV ≠ website (36% match)** — backtester is for ranking only. IPR backtester is INVERSE-indicator for framework changes (r1_v3 looked best on backtester, worst on website).
+14. **Practical ceiling ~10,625**. TROLL (competitor) also stuck at ~10,600 with 14+ params. Different approaches converged.
+15. **Gap to #1 (11,744) likely seed variance** — exhaustive probing found no unexploited alpha.
+16. **traderData format matters** — removing unused state variables caused 2 fewer IPR fills (-39 PnL). Keep all fields.
 
 ### Round 1 File Organization
 
 ```
 trader-logic/round-1/
-├── r1_medallion.py                      # CURRENT BEST (website 5,229)
+├── r1_v4.py                             # CURRENT BEST (website 10,624.84) — r1_v2 IPR + LU ACO
+├── r1_v2.py                             # Previous best (website 10,536.81) — simple mid + drift
+├── r1_v3.py                             # Failed LU-on-IPR attempt (website 7,974.84)
+├── r1_hybrid.py                         # Seed-detection experiment (website 10,106-10,107, no improvement)
+├── r1_medallion.py                      # Older baseline (website 10,467.8) — microprice regression
+├── r1_troll.py                          # Competitor's strategy (14+ params) for comparison
 ├── trader.py                            # Basic combined trader (website 4,934)
-├── template_stable.py                   # ACO template (EMERALDS-like)
-├── template_random_walk.py              # IPR template (TOMATOES-like)
-├── template_basket.py                   # ETF basket arb template
-├── template_options.py                  # Options template
-├── template_conversion.py               # Cross-exchange arb template
-├── template_olivia.py                   # Insider bot detection template
+├── template_*.py                        # Archetype templates (stable/random_walk/basket/options/etc)
 ├── refit_regression.py                  # Utility: auto-refit microprice regression
 └── analysis_round1.py                   # Product analysis script
 
 run-logs/round-1/
-├── god-logger-run/103917/               # Clean book (zero orders) — website day 0
-├── 105087/                              # Basic trader run — website 4,934
-└── 105821/                              # r1_medallion run — website 5,229
+├── god-logger-run/103917/               # Clean book (zero orders) — website day 0 pristine data
+├── 134926/                              # r1_medallion best run — website 10,467.8
+├── 210525/                              # PROBE that accidentally found simpler-mid alpha → v2
+├── 211338/                              # r1_v2 run — website 10,536.81
+├── 212392/                              # r1_v3 regression analysis
+└── 213352/                              # r1_v4 CURRENT BEST — website 10,624.84
 ```
 
 ### Reference Backtesters (Round 1 Validated)
