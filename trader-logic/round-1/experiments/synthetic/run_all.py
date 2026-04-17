@@ -18,11 +18,8 @@ from statistics import mean, median
 SEEDS = [42, 123, 456, 789]
 STRATEGIES = {
     "r1_v4": "trader-logic/round-1/r1_v4.py",
-    "r1_v5": "trader-logic/round-1/r1_v5.py",
     "r1_v7": "trader-logic/round-1/r1_v7.py",
-    "r1_v8": "trader-logic/round-1/r1_v8.py",
-    "medallion": "trader-logic/round-1/early_versions/r1_medallion.py",
-    "nancy": "trader-logic/round-1/references/nancy_algov4.py",
+    "r1_v9_def": "trader-logic/round-1/r1_v9_defensive.py",
 }
 REGIMES = ["UPTREND", "FLAT", "DOWNTREND", "REVERSAL"]
 TICKS = 10_000
@@ -98,12 +95,18 @@ def main():
     for i, (n, tot) in enumerate(ranked):
         print(f"  {i + 1}. {n:12s}  {tot:>12,.0f}")
 
-    # Specific comparison: v5 vs v4 per regime
-    print("\nr1_v5 vs r1_v4 per regime (mean delta):")
+    # Specific comparison: v9_def vs v4 per regime (insurance cost/benefit)
+    print("\nr1_v9_def vs r1_v4 per regime (mean delta):")
     for day in range(4):
         v4 = mean(results["r1_v4"][day])
-        v5 = mean(results["r1_v5"][day])
-        print(f"  {REGIMES[day]:>10s}: v4={v4:>9,.0f}  v5={v5:>9,.0f}  delta={v5 - v4:+9,.0f}")
+        v9 = mean(results["r1_v9_def"][day])
+        print(f"  {REGIMES[day]:>10s}: v4={v4:>9,.0f}  v9={v9:>9,.0f}  delta={v9 - v4:+9,.0f}")
+
+    print("\nr1_v9_def vs r1_v7 per regime (mean delta):")
+    for day in range(4):
+        v7 = mean(results["r1_v7"][day])
+        v9 = mean(results["r1_v9_def"][day])
+        print(f"  {REGIMES[day]:>10s}: v7={v7:>9,.0f}  v9={v9:>9,.0f}  delta={v9 - v7:+9,.0f}")
 
 
 if __name__ == "__main__":
