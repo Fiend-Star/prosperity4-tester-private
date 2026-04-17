@@ -4,7 +4,7 @@ from typer import Argument, Option, Typer
 from typing import Annotated, Optional
 from pathlib import Path
 from prosperity4bt.back_tester import BackTester
-from prosperity4bt.models.test_options import TestOptions, TradeMatchingMode, MatchMode
+from prosperity4bt.models.test_options import TestOptions, TradeMatchingMode, MatchMode, ExtraFlowMode
 
 app = Typer(context_settings={"help_option_names": ["--help", "-h"]})
 
@@ -24,6 +24,7 @@ def run(
     ticks: Annotated[Optional[int], Option("--ticks", help="Maximum number of ticks to simulate per day.")] = None,
     iterations: Annotated[Optional[int], Option("--iterations", help="Number of times run() is called per day. Simulates test (1000) or final (10000) scoring cadence. Between calls, resting orders persist.")] = None,
     match_mode: Annotated[MatchMode, Option("--match-mode", help="Matching mode: 'default' (>= crossing), 'imc' (== exact + taker sim), 'strict' (== exact only).")] = MatchMode.default,
+    extra_flow: Annotated[ExtraFlowMode, Option("--extra-flow", help="Simulate R2 MAF extra 25% flow. 'none' = no change (80% testing case); 'scale' = multiply volumes by 1.25; 'interp' = inject new levels at midpoints.")] = ExtraFlowMode.none,
 ):
     if out is not None and no_out:
         print("Error: --out and --no-out are mutually exclusive")
@@ -40,6 +41,7 @@ def run(
     options.max_ticks = ticks
     options.iterations = iterations
     options.match_mode = match_mode
+    options.extra_flow = extra_flow
 
     back_tester = BackTester(options)
     back_tester.run()

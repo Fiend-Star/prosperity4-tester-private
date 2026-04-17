@@ -3,7 +3,7 @@ from io import StringIO
 from IPython.utils.io import Tee
 from tqdm import tqdm
 from prosperity4bt.constants import LIMITS
-from prosperity4bt.models.test_options import TradeMatchingMode, MatchMode
+from prosperity4bt.models.test_options import TradeMatchingMode, MatchMode, ExtraFlowMode
 from prosperity4bt.tools.data_reader import BackDataReader
 from prosperity4bt.datamodel import TradingState, Observation, Symbol, Order, OrderDepth, Listing, ConversionObservation
 from prosperity4bt.tools.log_creator import ActivityLogCreator
@@ -15,7 +15,7 @@ from prosperity4bt.tools.order_match_maker import OrderMatchMaker
 
 class TestRunner:
 
-    def __init__(self, trader, data_reader: BackDataReader, round: int, day: int, show_progress_bar: bool=False, print_output: bool=False, trade_matching_mode=TradeMatchingMode.all, max_ticks: int=None, iterations: int=None, match_mode: MatchMode=MatchMode.default):
+    def __init__(self, trader, data_reader: BackDataReader, round: int, day: int, show_progress_bar: bool=False, print_output: bool=False, trade_matching_mode=TradeMatchingMode.all, max_ticks: int=None, iterations: int=None, match_mode: MatchMode=MatchMode.default, extra_flow: ExtraFlowMode=ExtraFlowMode.none):
         self.trader = trader
         self.data_reader = data_reader
         self.round = round
@@ -26,6 +26,7 @@ class TestRunner:
         self.max_ticks = max_ticks
         self.iterations = iterations  # None = call run() every tick
         self.match_mode = match_mode
+        self.extra_flow = extra_flow
 
 
     def run(self):
@@ -140,6 +141,9 @@ class TestRunner:
             state.order_depths[product] = order_depth
             state.listings[product] = Listing(product, product, 1)
 
+        if self.extra_flow != ExtraFlowMode.none:
+            self.__apply_extra_flow(state)
+
         observation_row = data.observations.get(state.timestamp)
         if observation_row is None:
             state.observations = Observation({}, {})
@@ -158,6 +162,52 @@ class TestRunner:
             )
 
         return state
+
+
+    def __apply_extra_flow(self, state: TradingState) -> None:
+        """Simulates R2 MAF "extra 25% flow" by mutating state.order_depths in place.
+
+        Per R2 brief: "the volumes and prices of these quotes fit perfectly in the
+        distribution of the already available quotes. Example: given ask[9]=10 and
+        ask[7]=10, inject ask[8]=5".
+
+        Two modes:
+          scale:  multiply all existing volumes by 1.25 (pragmatic; no new levels)
+          interp: inject a new level at the midpoint between each pair of consecutive
+                  price levels with volume = 0.25 * min(surrounding volumes). Matches
+                  the brief's literal semantics when gaps >= 2 ticks.
+        """
+        for od in state.order_depths.values():
+            if self.extra_flow == ExtraFlowMode.scale:
+                for price in list(od.buy_orders.keys()):
+                    od.buy_orders[price] = int(round(od.buy_orders[price] * 1.25))
+                for price in list(od.sell_orders.keys()):
+                    # sell_orders store negative volumes; scale absolute value
+                    od.sell_orders[price] = -int(round(abs(od.sell_orders[price]) * 1.25))
+            elif self.extra_flow == ExtraFlowMode.interp:
+                od.buy_orders = self.__interp_levels(od.buy_orders, sign=1)
+                od.sell_orders = self.__interp_levels(od.sell_orders, sign=-1)
+
+    def __interp_levels(self, orders: dict, sign: int) -> dict:
+        """Inject midpoint levels between consecutive existing levels.
+        sign=1 for buy_orders (positive volumes), sign=-1 for sell_orders (negative)."""
+        if len(orders) < 2:
+            return orders
+        prices = sorted(orders.keys())
+        new_orders = dict(orders)
+        for i in range(len(prices) - 1):
+            p_lo, p_hi = prices[i], prices[i + 1]
+            if p_hi - p_lo < 2:
+                continue
+            p_mid = (p_lo + p_hi) // 2
+            if p_mid in new_orders:
+                continue
+            v_lo = abs(orders[p_lo])
+            v_hi = abs(orders[p_hi])
+            v_mid = int(round(0.25 * min(v_lo, v_hi)))
+            if v_mid > 0:
+                new_orders[p_mid] = sign * v_mid
+        return new_orders
 
 
     # def __validate_orders(self, orders: dict[Symbol, list[Order]]) -> None:

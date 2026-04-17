@@ -17,6 +17,13 @@ class MatchMode(str, Enum):
     website = "website"   # Detect ALL takers from orderbook tight spread, route through unified book
 
 
+class ExtraFlowMode(str, Enum):
+    # Simulates R2 MAF "extra 25% flow" injected into the order book.
+    none = "none"       # No book modification (default: simulates the 80% testing case)
+    scale = "scale"     # Multiply all L1/L2 volumes by 1.25 (pragmatic approximation)
+    interp = "interp"   # Inject new price levels at midpoints between consecutive levels (semantic)
+
+
 class TestOptions:
     def __init__(self, algorithm_path: Path, round_day: list[str], output_file: Path):
         self.algorithm_path = algorithm_path
@@ -32,6 +39,7 @@ class TestOptions:
         self.max_ticks = None
         self.iterations = None  # None = call run() every tick; int = total run() calls per day
         self.match_mode = MatchMode.default
+        self.extra_flow = ExtraFlowMode.none
 
 
 class RoundDayOption:
