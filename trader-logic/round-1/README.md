@@ -46,7 +46,9 @@ round-1/
 | 7 | r1_v9_defensive.py | 10,601.66 | Cubic ACO inventory skew + circuit breaker + Banker's-rounding/tie-breaker fixes. Insurance: −23 vs v4 on real, +10k mean across 16 synthetic regime stress combos. |
 | 8 | r1_v10_defensive.py | 10,455.66 | v9 + toxic-maker anchor fix + blind-bull startup fix. IPR cost −146 vs v9 (neutral startup on uptrend). ACO identical to v9 on real data (dormant, no crash). |
 | 9 | r1_v11_defensive.py | **10,455.66** | v10 + `cur_mid` crash trigger (no MA lag) + IPR one-sided penny-improve drop. **Byte-identical to v10 on website** — zero cost, two dormant defenses (crash never fired, one-sided ticks had no taker flow). |
-| 10 | r1_v12_defensive.py | not submitted | v11 + blind-eye reset fix + sweep-optimal params (MAX_CONCESSION 8→4, CRASH_THRESHOLD 25→15). **Synthetic 25-seed: +14,940 over v10 total, wins 7/7 regimes** with >2σ significance on 6. Sweep inverted the "trapped at +80 needs concession=16" intuition — data says DECREASE to 4. |
+| 10 | r1_v12_defensive.py | **10,443.78** | v11 + blind-eye reset fix + sweep-optimal params (MAX_CONCESSION 8→4, CRASH_THRESHOLD 25→15). Synthetic +14,940 over v10; **website −12 (crash regimes never materialized; lower threshold triggers false positives on real ACO noise ±18)**. |
+| 11 | r1_v13_defensive.py | 10,443.78 | v12 + forced-dump spread-cross when crash_mode + \|pos\|>60. Synthetic −21,715 vs v12 (cycle-loss); byte-identical to v12 on website. Textbook "inventory ping-pong" failure. |
+| 12 | r1_v14_defensive.py | not submitted | v12 + asymmetric quoting: `buy_cap=0` when crash_mode + pos≥60 (symmetric on short side). Synthetic −4,736 vs v12 but +21,979 vs v13. Architecturally correct for true one-way crashes; synthetic mean-reversion makes v12's edge-capturing bid more profitable in our test regimes. |
 
 ## Key learnings (see [CLAUDE.md](../../CLAUDE.md) Round 1 section for the full list)
 

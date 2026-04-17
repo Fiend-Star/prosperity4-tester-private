@@ -91,8 +91,8 @@ class BackDataReader:
             return [1, 2, 3]
         if round == 5:
             return [2, 3, 4]
-        if round == 99:  # synthetic regime tests: uptrend, flat, downtrend, reversal, aco_crash, aco_flash, permanent
-            return [0, 1, 2, 3, 4, 5, 6]
+        if round == 99:  # synthetic regime tests (8): uptrend, flat, downtrend, reversal, aco_crash, aco_flash, permanent, crash_deep
+            return [0, 1, 2, 3, 4, 5, 6, 7]
         return []
 
     @abstractmethod

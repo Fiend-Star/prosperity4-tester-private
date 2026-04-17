@@ -19,6 +19,10 @@ Generates 5 days in prosperity4bt/resources/round99/:
   day 6 — PERMANENT    (IPR uptrend baseline; ACO drops 10000 -> 9950 at tick
                         5000 and NEVER RECOVERS. Tests persistent regime change
                         where detection lag leaves toxic inventory stuck.)
+  day 7 — CRASH_DEEP   (IPR uptrend baseline; ACO drops 10000 -> 9850 at tick
+                        5000 and NEVER RECOVERS. 150-tick drop, 3x more severe
+                        than PERMANENT. Stresses trapped-inventory scenarios
+                        where passive asks can't unwind at widened edges.)
 
 Regenerate with different seed to test robustness.
 """
@@ -44,7 +48,7 @@ TRADE_HEADER = "timestamp;buyer;seller;symbol;currency;price;quantity"
 def ipr_mid(tick: int, day: int, rng: random.Random) -> float:
     base = 12_000.0
     noise = rng.gauss(0, 1.0)
-    if day in (0, 4, 5, 6):  # uptrend baseline (days 4/5/6 isolate ACO crash events)
+    if day in (0, 4, 5, 6, 7):  # uptrend baseline (days 4-7 isolate ACO crash events)
         drift = 0.01 * tick
     elif day == 1:
         drift = 0.0
@@ -79,6 +83,10 @@ def aco_mid(tick: int, day: int, rng: random.Random) -> float:
     if day == 6:
         # PERMANENT: instantaneous drop at tick 5000, NEVER recovers
         base = 10_000.0 if tick < 5000 else 9_950.0
+        return base + rng.gauss(0, 1.5)
+    if day == 7:
+        # CRASH_DEEP: 150-tick drop, NEVER recovers (severe trap scenario)
+        base = 10_000.0 if tick < 5000 else 9_850.0
         return base + rng.gauss(0, 1.5)
     return 10_000.0 + rng.gauss(0, 2.0)
 
@@ -158,7 +166,7 @@ def write_day(day: int):
 
 if __name__ == "__main__":
     print(f"Generating synthetic round99 data (seed={SEED}, {TICKS} ticks/day):")
-    for d, label in enumerate(["UPTREND", "FLAT", "DOWNTREND", "REVERSAL", "ACO_CRASH", "ACO_FLASH", "PERMANENT"]):
+    for d, label in enumerate(["UPTREND", "FLAT", "DOWNTREND", "REVERSAL", "ACO_CRASH", "ACO_FLASH", "PERMANENT", "CRASH_DEEP"]):
         write_day(d)
         print(f"  day {d}: {label}")
     print("Done.")
