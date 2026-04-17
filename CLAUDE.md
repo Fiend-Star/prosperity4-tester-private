@@ -544,6 +544,9 @@ INTERCEPT = 215-387 (varies by day — absorbed by FV ~10000)
 | Nancy's algov4 (benchmark) | 228959 | **10,734.03** | 7,496 | 3,238 | Teammate reference — +109 over our best |
 | **r1_v4** | 213352 | **10,624.84** | **7,446** | **3,179** | **OUR CURRENT BEST** — r1_v2 IPR + LU ACO |
 | r1_v5 (guardrail) | 228366 | 10,612.84 | 7,434 | 3,179 | Nancy-inspired trend detector — neutral −12 |
+| r1_v9_defensive | 251714 | 10,601.66 | 7,438 | 3,164 | Cubic ACO skew + circuit breaker + correctness fixes (Banker's, tie-breakers). Insurance −23 vs v4. |
+| r1_v10_defensive | 252728 | 10,455.66 | 7,292 | 3,164 | v9 + toxic-maker fix (anchors to avg_mid in crash) + blind-bull startup fix. ACO identical to v9 on real (dormant). IPR cost −146 from neutral startup. |
+| r1_v11_defensive | 253476 | **10,455.66** | **7,292** | **3,164** | v10 + cur_mid crash trigger + IPR one-sided drop. **Byte-identical to v10 on website** — both fixes dormant (no crash, one-sided ticks had no taker flow). Zero-cost structural insurance. |
 | r1_v2 | 211338 | 10,536.81 | 7,446 | 3,091 | Simple mid + drift_bias=5 (via 210525 probe) |
 | r1_medallion bias=6 | 134926 | 10,467.8 | 7,377 | 3,091 | Previous best, microprice regression |
 | r1_v7 (guardrail + wall-mid) | 228024 | 10,465.84 | 7,287 | 3,179 | REGRESSION −159, delayed entry trap |
@@ -639,12 +642,23 @@ All tested on same CSV data, day 0, 1k ticks:
 14. **Practical ceiling ~10,625**. TROLL (competitor) also stuck at ~10,600 with 14+ params. Different approaches converged.
 15. **Gap to #1 (11,744) likely seed variance** — exhaustive probing found no unexploited alpha.
 16. **traderData format matters** — removing unused state variables caused 2 fewer IPR fills (-39 PnL). Keep all fields.
+17. **ACO BT gradient overshoots ~60×** — quantified by r1_v9_defensive (251714): cubic skew predicted −924 ACO BT on day 1, actual website cost was −15. Treat any ACO BT delta < 1,000 as noise; trust only large structural changes.
+18. **Cubic inventory skew + circuit breaker = essentially free insurance** — r1_v9_defensive cost only −23 vs r1_v4 on website but wins 16/16 synthetic regime stress tests with +10k mean PnL. Use as base when tail-risk weighting > 0.2%.
+19. **Banker's rounding bug latent in v7** — Python's `round()` is round-half-to-even; with `(int+int)/2.0` midpoints landing on .5 ~50% of ticks, this introduced arbitrary 1-tick bias. Fix via `int(math.floor(x + 0.5))` recovered ~+150 IPR PnL in v9 vs v7 (7,438 vs 7,287).
+20. **v9 had a "toxic maker" circuit-breaker bug** — when crash_mode disabled take/clear, the maker still anchored to fv_eff≈10000. In a market crash to 9,940, every market bid is below 10000, so the bot posted passive buys at `max(bid)+1` and got crossed by toxic sellers. v10 fix: in crash_mode, anchor `base_fv` to `avg_mid` and widen edges by +8/+4 ticks. ACO crash test (synthetic, ACO 10000→9940→10000 over ticks 4000-7000): **v10 saves +41,339 ACO PnL vs v9**.
+21. **Blind-bull startup latent in v5/v7/v9** — `if n < MIN_HISTORY: return IPR_DRIFT_BIAS` defaulted to +5 (bullish prior) before any trend data. v10 fix: return 0.0 (neutral). Cost: ~100-150 IPR PnL/day on uptrends. Worth it for regime-uncertain days; r1_v4/v5/v9 still appropriate when uptrend is the strong prior. **Quantified on website:** v10 (252728) scored 7,292 IPR = −146 vs v9's 7,438.
+22. **v10 had circuit-breaker lag latent in the 5-tick avg_mid trigger** — detection took 2-3 ticks after an instant 50-tick mid drop. During those 2-3 ticks the bot executed normal taker logic and bought aggressively into the crash. Accidentally profitable in mean-reverting synthetic tests (ACO_CRASH v10 > v11 by 991; ACO_FLASH v11 > v10 by only 205), but catastrophic in a persistent regime change. v11 fix: trigger on `cur_mid` (instant), keep `avg_mid` as anchor for stable quoting in stress.
+23. **IPR one-sided penny-improve = adverse selection** — when ask side disappears, posting buy at `best_bid+1` puts you at the top of the crowded bid stack right when toxic sellers return. v11 fix: in one-sided books, provide liquidity ONLY on the disappeared side at premium edge; skip the penny-improve on the crowded side. Rare regime (~9% of ticks), but free defense.
+24. **v10 and v11 byte-identical on Round 1 day-1 website** — submissions 252728 (v10) and 253476 (v11) produced exact same total/IPR/ACO/positions/traderData. Confirms: (a) circuit breaker never triggered in Round 1 (no ACO crash); (b) one-sided IPR ticks had no taker flow in this market, so removing penny-improve changed zero fills. Insurance is structurally correct but dormant until a regime event.
 
 ### Round 1 File Organization
 
 ```
 trader-logic/round-1/
 ├── r1_v4.py                             # CURRENT BEST (website 10,624.84)
+├── r1_v9_defensive.py                   # Cubic ACO skew + circuit breaker (website 10,601.66)
+├── r1_v10_defensive.py                  # v9 + crash_mode anchor-to-avg_mid + neutral startup drift (website 10,455.66)
+├── r1_v11_defensive.py                  # v10 + cur_mid crash trigger (reactive) + one-sided penny-improve drop (website 10,455.66 — byte-identical to v10)
 ├── refit_regression.py                  # Utility: auto-refit microprice regression
 ├── BACKTEST_COMMANDS.md                 # Canonical backtest command reference
 ├── README.md                            # Strategy evolution table + directory map

@@ -43,6 +43,9 @@ round-1/
 | 4 | experiments/r1_hybrid.py | 10,107 | Seed-detection hybrid failed — drawdown IS the drift entry cost |
 | 5 | experiments/r1_v3.py | 7,975 | Full LU framework on IPR broke drift capture |
 | **6** | **r1_v4.py** | **10,624.84** | r1_v2 IPR + LU ACO clear step = +88 PnL |
+| 7 | r1_v9_defensive.py | 10,601.66 | Cubic ACO inventory skew + circuit breaker + Banker's-rounding/tie-breaker fixes. Insurance: −23 vs v4 on real, +10k mean across 16 synthetic regime stress combos. |
+| 8 | r1_v10_defensive.py | 10,455.66 | v9 + toxic-maker anchor fix + blind-bull startup fix. IPR cost −146 vs v9 (neutral startup on uptrend). ACO identical to v9 on real data (dormant, no crash). |
+| 9 | r1_v11_defensive.py | **10,455.66** | v10 + `cur_mid` crash trigger (no MA lag) + IPR one-sided penny-improve drop. **Byte-identical to v10 on website** — zero cost, two dormant defenses (crash never fired, one-sided ticks had no taker flow). |
 
 ## Key learnings (see [CLAUDE.md](../../CLAUDE.md) Round 1 section for the full list)
 
