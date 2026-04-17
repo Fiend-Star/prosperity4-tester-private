@@ -50,6 +50,7 @@ round-1/
 | 11 | r1_v13_defensive.py | 10,443.78 | v12 + forced-dump spread-cross when crash_mode + \|pos\|>60. Synthetic −21,715 vs v12 (cycle-loss); byte-identical to v12 on website. Textbook "inventory ping-pong" failure. |
 | 12 | r1_v14_defensive.py | 10,443.78 | v12 + asymmetric quoting: `buy_cap=0` when crash_mode + pos≥60 (symmetric on short side). Byte-identical to v12/v13 on website (shutoff never fires). Synthetic −4,736 vs v12 but +21,979 vs v13. Architecturally correct for true one-way crashes. |
 | 13 | r1_v15.py | not submitted | v14 + adaptive ACO anchor (bootstrap from first tick, slow median update). **FAILED: synthetic −58,568 vs v14.** On gradient crashes, anchor follows price down, crash_mode self-disarms, bot accumulates toxic inventory at crashed prices. Addresses FV-shift concern but breaks gradient-crash protection. Don't ship. |
+| 14 | r1_v16.py | not submitted | v15 + freeze anchor updates while `prelim_crash` armed. Partial fix: +22,546 vs v15 on ACO_CRASH, still −37,983 vs v14 total synthetic. Gradient slow-start evades the freeze threshold — the fix engages too late. Architectural tension between FV-shift insurance and gradient-crash protection is unresolvable with a single threshold. |
 
 ## Submission recommendation (as of 2026-04-17)
 
