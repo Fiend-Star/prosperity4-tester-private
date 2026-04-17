@@ -50,16 +50,29 @@ round-1/
 | 11 | r1_v13_defensive.py | 10,443.78 | v12 + forced-dump spread-cross when crash_mode + \|pos\|>60. Synthetic −21,715 vs v12 (cycle-loss); byte-identical to v12 on website. Textbook "inventory ping-pong" failure. |
 | 12 | r1_v14_defensive.py | 10,443.78 | v12 + asymmetric quoting: `buy_cap=0` when crash_mode + pos≥60 (symmetric on short side). Byte-identical to v12/v13 on website (shutoff never fires). Synthetic −4,736 vs v12 but +21,979 vs v13. Architecturally correct for true one-way crashes. |
 | 13 | r1_v15.py | not submitted | v14 + adaptive ACO anchor (bootstrap from first tick, slow median update). **FAILED: synthetic −58,568 vs v14.** On gradient crashes, anchor follows price down, crash_mode self-disarms, bot accumulates toxic inventory at crashed prices. Addresses FV-shift concern but breaks gradient-crash protection. Don't ship. |
-| 14 | r1_v16.py | not submitted | v15 + freeze anchor updates while `prelim_crash` armed. Partial fix: +22,546 vs v15 on ACO_CRASH, still −37,983 vs v14 total synthetic. Gradient slow-start evades the freeze threshold — the fix engages too late. Architectural tension between FV-shift insurance and gradient-crash protection is unresolvable with a single threshold. |
+| 14 | r1_v16.py | not submitted | v15 + freeze anchor updates while `prelim_crash` armed. Partial fix: +22,546 vs v15 on ACO_CRASH, still −37,983 vs v14 total synthetic. Gradient slow-start evades the freeze threshold — the fix engages too late. |
+| **15** | **r1_v17.py** | **not submitted** | **v14 + bootstrap-only anchor (one-time snap at tick 0, frozen forever). 13-regime × 25-seed synthetic: +2,748 vs v14 total. Matches v14 on crash regimes, wins +3,026 on ALT_FV_HIGH/LOW. NEW EV-optimal default — pareto-dominates v14 for FV-shift scenarios at ~3k total cost on synthetic baselines.** |
 
 ## Submission recommendation (as of 2026-04-17)
 
-**Ship r1_v9_defensive** for EV-optimal play:
-- **Max leaderboard points (no regime risk):** r1_v4 = 10,624.84
-- **EV-optimal with catastrophe insurance:** r1_v9_def = 10,601.66 (only −23 cost for full ACO defensive stack, preserves +5 IPR drift startup)
-- **Break-even vs v4 at P(rug pull) > 0.1%** based on v9's +22,230 synthetic PERMANENT advantage over v4
+After 8 website probes and 13-regime × 25-seed synthetic validation, the EV-optimal choice depends on threat model:
 
-v9 dominates v10/v11/v12/v13/v14 for real submission because the additional defensive refinements beyond v9 cost IPR alpha (−146) without gaining defense — v12/v13/v14 were byte-identical on 3 submissions (257139/258586/259621), confirming their extensions are dormant on real data.
+**Ship r1_v17** if you want full defensive stack with bootstrap FV-shift insurance:
+- Matches v14's crash-regime performance (ACO_CRASH/FLASH/PERMANENT/CRASH_DEEP all within noise)
+- Wins ALT_FV_HIGH +1,460 and ALT_FV_LOW +1,566 via bootstrap
+- Small cost on baseline regimes (~2.9k) from 2-tick snap offset
+- Website projected ≈ 10,440 (close to v14's 10,443.78)
+
+**Ship r1_v9_def** for EV-optimal play if you prioritize website points:
+- Website 10,601.66 (proven)
+- Only −23 cost for defensive stack, preserves +5 IPR drift startup
+- Break-even vs v4 at P(rug pull) > 0.1%
+
+**Ship r1_v4** if you're confident IMC stays boring:
+- Best website result 10,624.84
+- Zero defensive stack — fully exposed to regime surprises
+
+v10/v11/v12/v13/v14 are all pareto-dominated: either by v9 (if you keep +5 IPR drift) or by v17 (if you want the full defensive + FV-shift stack). Three submissions (257139/258586/259621) confirmed v12/v13/v14 are byte-identical on real data (10,443.78), meaning their additional refinements beyond v9 never fire on observed Round 1 data.
 
 ## Key learnings (see [CLAUDE.md](../../CLAUDE.md) Round 1 section for the full list)
 

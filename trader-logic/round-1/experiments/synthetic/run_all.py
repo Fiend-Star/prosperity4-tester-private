@@ -24,7 +24,11 @@ STRATEGIES = {
     "r1_v16": "trader-logic/round-1/r1_v16.py",
     "r1_v17": "trader-logic/round-1/r1_v17.py",
 }
-REGIMES = ["UPTREND", "FLAT", "DOWNTREND", "REVERSAL", "ACO_CRASH", "ACO_FLASH", "PERMANENT", "CRASH_DEEP"]
+REGIMES = [
+    "UPTREND", "FLAT", "DOWNTREND", "REVERSAL",
+    "ACO_CRASH", "ACO_FLASH", "PERMANENT", "CRASH_DEEP",
+    "ALT_FV_HIGH", "ALT_FV_LOW", "MID_SHIFT", "DEFENSE_BOT", "VOLUME_BURST",
+]
 TICKS = 10_000
 
 REPO = Path(__file__).resolve().parents[4]
