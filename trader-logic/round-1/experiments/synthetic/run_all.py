@@ -21,9 +21,9 @@ _SEED_COUNT = int(_os.environ.get("SEEDS", "25"))
 SEEDS = [42 + 73 * i for i in range(_SEED_COUNT)]
 STRATEGIES = {
     "r1_v4": "trader-logic/round-1/r1_v4.py",
-    "r1_v9_def": "trader-logic/round-1/r1_v9_defensive.py",
     "r1_v10_def": "trader-logic/round-1/r1_v10_defensive.py",
     "r1_v11_def": "trader-logic/round-1/r1_v11_defensive.py",
+    "r1_v12_def": "trader-logic/round-1/r1_v12_defensive.py",
 }
 REGIMES = ["UPTREND", "FLAT", "DOWNTREND", "REVERSAL", "ACO_CRASH", "ACO_FLASH", "PERMANENT"]
 TICKS = 10_000
@@ -99,32 +99,27 @@ def main():
     for i, (n, tot) in enumerate(ranked):
         print(f"  {i + 1}. {n:12s}  {tot:>12,.0f}")
 
-    # Specific comparison: v9_def vs v4 per regime (insurance cost/benefit)
-    print("\nr1_v9_def vs r1_v4 per regime (mean delta):")
-    for day in range(len(REGIMES)):
-        v4 = mean(results["r1_v4"][day])
-        v9 = mean(results["r1_v9_def"][day])
-        print(f"  {REGIMES[day]:>10s}: v4={v4:>9,.0f}  v9={v9:>9,.0f}  delta={v9 - v4:+9,.0f}")
-
-    print("\nr1_v10_def vs r1_v9_def per regime (mean delta):")
-    for day in range(len(REGIMES)):
-        v9 = mean(results["r1_v9_def"][day])
-        v10 = mean(results["r1_v10_def"][day])
-        print(f"  {REGIMES[day]:>10s}: v9={v9:>9,.0f}  v10={v10:>9,.0f}  delta={v10 - v9:+9,.0f}")
-
-    print("\nr1_v11_def vs r1_v10_def per regime (mean delta with SE, significance):")
     import math as _math
-    for day in range(len(REGIMES)):
-        v10_vals = results["r1_v10_def"][day]
-        v11_vals = results["r1_v11_def"][day]
-        v10_m = mean(v10_vals)
-        v11_m = mean(v11_vals)
-        delta = v11_m - v10_m
-        # Paired-difference SE (same seeds = paired samples)
-        diffs = [a - b for a, b in zip(v11_vals, v10_vals)]
-        se = stdev(diffs) / _math.sqrt(len(diffs)) if len(diffs) > 1 else 0
-        sig = "***" if abs(delta) > 2 * se else ("*" if abs(delta) > se else " ")
-        print(f"  {REGIMES[day]:>10s}: v10={v10_m:>9,.0f}  v11={v11_m:>9,.0f}  delta={delta:+9,.0f}  SE={se:>5,.0f}  {sig}")
+
+    def paired_delta(name_a, name_b, a_label, b_label):
+        print(f"\n{name_b} vs {name_a} per regime (mean delta with SE, significance):")
+        for day in range(len(REGIMES)):
+            a_vals = results[name_a][day]
+            b_vals = results[name_b][day]
+            a_m = mean(a_vals)
+            b_m = mean(b_vals)
+            delta = b_m - a_m
+            diffs = [x - y for x, y in zip(b_vals, a_vals)]
+            se = stdev(diffs) / _math.sqrt(len(diffs)) if len(diffs) > 1 and stdev(diffs) > 0 else 0
+            if se == 0:
+                sig = "(identical)" if abs(delta) < 0.5 else "***"
+            else:
+                sig = "***" if abs(delta) > 2 * se else ("*" if abs(delta) > se else " ")
+            print(f"  {REGIMES[day]:>10s}: {a_label}={a_m:>9,.0f}  {b_label}={b_m:>9,.0f}  delta={delta:+9,.0f}  SE={se:>5,.0f}  {sig}")
+
+    paired_delta("r1_v10_def", "r1_v11_def", "v10", "v11")
+    paired_delta("r1_v10_def", "r1_v12_def", "v10", "v12")
+    paired_delta("r1_v11_def", "r1_v12_def", "v11", "v12")
 
 
 if __name__ == "__main__":

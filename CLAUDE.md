@@ -547,6 +547,7 @@ INTERCEPT = 215-387 (varies by day — absorbed by FV ~10000)
 | r1_v9_defensive | 251714 | 10,601.66 | 7,438 | 3,164 | Cubic ACO skew + circuit breaker + correctness fixes (Banker's, tie-breakers). Insurance −23 vs v4. |
 | r1_v10_defensive | 252728 | 10,455.66 | 7,292 | 3,164 | v9 + toxic-maker fix (anchors to avg_mid in crash) + blind-bull startup fix. ACO identical to v9 on real (dormant). IPR cost −146 from neutral startup. |
 | r1_v11_defensive | 253476 | **10,455.66** | **7,292** | **3,164** | v10 + cur_mid crash trigger + IPR one-sided drop. **Byte-identical to v10 on website** — both fixes dormant (no crash, one-sided ticks had no taker flow). Zero-cost structural insurance. |
+| r1_v12_defensive | not yet submitted | BT day 1 10,009 | — | — | v11 + blind-eye reset fix (one-sided book falls back to aco_mids, not ACO_FV) + sweep-optimal params (MAX_CONCESSION 8→4, CRASH_THRESHOLD 25→15). **Synthetic 25-seed: +14,940 vs v10 across 7 regimes**, wins every regime with >2σ significance on 6/7. |
 | r1_v2 | 211338 | 10,536.81 | 7,446 | 3,091 | Simple mid + drift_bias=5 (via 210525 probe) |
 | r1_medallion bias=6 | 134926 | 10,467.8 | 7,377 | 3,091 | Previous best, microprice regression |
 | r1_v7 (guardrail + wall-mid) | 228024 | 10,465.84 | 7,287 | 3,179 | REGRESSION −159, delayed entry trap |
@@ -650,6 +651,17 @@ All tested on same CSV data, day 0, 1k ticks:
 22. **v10 had circuit-breaker lag latent in the 5-tick avg_mid trigger** — detection took 2-3 ticks after an instant 50-tick mid drop. During those 2-3 ticks the bot executed normal taker logic and bought aggressively into the crash. Accidentally profitable in mean-reverting synthetic tests (ACO_CRASH v10 > v11 by 991; ACO_FLASH v11 > v10 by only 205), but catastrophic in a persistent regime change. v11 fix: trigger on `cur_mid` (instant), keep `avg_mid` as anchor for stable quoting in stress.
 23. **IPR one-sided penny-improve = adverse selection** — when ask side disappears, posting buy at `best_bid+1` puts you at the top of the crowded bid stack right when toxic sellers return. v11 fix: in one-sided books, provide liquidity ONLY on the disappeared side at premium edge; skip the penny-improve on the crowded side. Rare regime (~9% of ticks), but free defense.
 24. **v10 and v11 byte-identical on Round 1 day-1 website** — submissions 252728 (v10) and 253476 (v11) produced exact same total/IPR/ACO/positions/traderData. Confirms: (a) circuit breaker never triggered in Round 1 (no ACO crash); (b) one-sided IPR ticks had no taker flow in this market, so removing penny-improve changed zero fills. Insurance is structurally correct but dormant until a regime event.
+25. **PERMANENT regime (day 6, added 2026-04-17) reveals toxic-maker fix's true value** — 25-seed synthetic: mean-reverting ACO_CRASH hides most of the v10-vs-v9 benefit (shows +40k because lag-induced buys become profitable on revert), ACO_FLASH shows +15k. **PERMANENT (drop + no recovery) shows +97,135 PnL v10 over v9** — the persistent-regime-change scenario where lag-induced buys stay toxic. Use PERMANENT regime to quantify circuit-breaker value; use mean-reverting regimes to calibrate false-positive cost.
+26. **v10 beats v11 on synthetic totals (1,543,869 vs 1,543,559 across 7 regimes, 25 seeds)** — v11's cur_mid trigger reacts faster but flickers in/out of crash_mode on gradual crashes (ACO_CRASH: v11 −1,017 ± 49 SE vs v10). v11 wins on sharp transitions (ACO_FLASH +400, PERMANENT +307) but loses more on gradual (−1,017). Net: v10 is empirically better on our regime mix. The trigger-lag fix is structurally correct (prevents 2-3 tick lag on instant crashes) but empirically costs on noisy threshold crossings. Add hysteresis (enter at 25, exit at 20) to get best of both worlds, or keep v10 as operational default.
+27. **ACO param sweep (9 combos × 4 regimes × 25 seeds) inverted the user's intuition about the skew-vs-edge collision**. Hypothesis was that MAX_CONCESSION (8) < widened edge (12) leaves inventory trapped at +80 during crashes, so scale concession up to 16. Sweep data showed the opposite: (4, 15) beats (8, 25) by +9,280, (12, 35) worst at −18,844. Rankings:
+    - (4, 15): 892,746 mean ← v12 adopts
+    - (8, 15): 890,239
+    - (4, 25): 886,650
+    - (8, 25): 883,766 ← v11 default
+    - (12, 35): 864,922
+    The "trapped at +80" scenario is mathematically real but empirically dominated: widening concession pulls FV further from market during the gradient, hurting UPTREND by ~6k while gaining essentially nothing on PERMANENT. The correct lever for forced dumping is aggressive spread-crossing, not larger skew.
+28. **v12 (sweep-optimal + blind-eye reset fix) wins 7/7 regimes over v10 at 25-seed significance** — +14,940 total, per-regime gains: UPTREND +2,073, FLAT +2,169, DOWNTREND +2,001, REVERSAL +2,100, ACO_CRASH +4,582, ACO_FLASH +1,664, PERMANENT +352. Lower MAX_CONCESSION=4 reduces FV distortion at moderate inventory (helps baseline regimes); lower CRASH_THRESHOLD=15 catches gradient crashes earlier (helps ACO_CRASH). Ship v12 as the new defensive default pending website validation.
+29. **Blind-eye reset bug in v10/v11** — `else: cur_mid = avg_mid = ACO_FV` triggered when book lost a side, which reset the crash detection math to |10000-10000|=0 and silently disarmed `crash_mode` at the exact moment market structure broke. v12 fix: fall back to last known `aco_mids` average, only use ACO_FV at tick 0 boot. Unobserved in synthetic (book never breaks during crashes) but real scenario (flash crash → bids evaporate → v10/v11 disarm).
 
 ### Round 1 File Organization
 
@@ -659,6 +671,7 @@ trader-logic/round-1/
 ├── r1_v9_defensive.py                   # Cubic ACO skew + circuit breaker (website 10,601.66)
 ├── r1_v10_defensive.py                  # v9 + crash_mode anchor-to-avg_mid + neutral startup drift (website 10,455.66)
 ├── r1_v11_defensive.py                  # v10 + cur_mid crash trigger (reactive) + one-sided penny-improve drop (website 10,455.66 — byte-identical to v10)
+├── r1_v12_defensive.py                  # v11 + blind-eye reset fix + sweep-optimal (MAX_CONCESSION=4, CRASH_THRESHOLD=15). Synthetic 25-seed: +14,940 vs v10
 ├── refit_regression.py                  # Utility: auto-refit microprice regression
 ├── BACKTEST_COMMANDS.md                 # Canonical backtest command reference
 ├── README.md                            # Strategy evolution table + directory map

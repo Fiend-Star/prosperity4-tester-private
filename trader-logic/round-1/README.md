@@ -46,6 +46,7 @@ round-1/
 | 7 | r1_v9_defensive.py | 10,601.66 | Cubic ACO inventory skew + circuit breaker + Banker's-rounding/tie-breaker fixes. Insurance: −23 vs v4 on real, +10k mean across 16 synthetic regime stress combos. |
 | 8 | r1_v10_defensive.py | 10,455.66 | v9 + toxic-maker anchor fix + blind-bull startup fix. IPR cost −146 vs v9 (neutral startup on uptrend). ACO identical to v9 on real data (dormant, no crash). |
 | 9 | r1_v11_defensive.py | **10,455.66** | v10 + `cur_mid` crash trigger (no MA lag) + IPR one-sided penny-improve drop. **Byte-identical to v10 on website** — zero cost, two dormant defenses (crash never fired, one-sided ticks had no taker flow). |
+| 10 | r1_v12_defensive.py | not submitted | v11 + blind-eye reset fix + sweep-optimal params (MAX_CONCESSION 8→4, CRASH_THRESHOLD 25→15). **Synthetic 25-seed: +14,940 over v10 total, wins 7/7 regimes** with >2σ significance on 6. Sweep inverted the "trapped at +80 needs concession=16" intuition — data says DECREASE to 4. |
 
 ## Key learnings (see [CLAUDE.md](../../CLAUDE.md) Round 1 section for the full list)
 
