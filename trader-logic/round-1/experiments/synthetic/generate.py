@@ -39,6 +39,13 @@ Generates 13 days in prosperity4bt/resources/round99/:
                          we boost ASK volume this tick 3x; symmetric for falls.
                          Tests whether volume-imbalance signals predict moves
                          and whether our strategies act on them.)
+  day 13 — ASYM_OPEN    (IPR uptrend; ACO with biased open book for first 30
+                         ticks — mid centered at 10007 instead of 10000, then
+                         normalizes to 10000. Reproduces the real 272466 day-1
+                         failure mode that cost r1_v17 ~1,743 PnL via first-tick
+                         anchor snap landing at 10008. v17 should fail here;
+                         v18's median-of-20 bootstrap + frozen MAD-from-anchor
+                         threshold should absorb it.)
 
 Regenerate with different seed to test robustness.
 """
@@ -61,7 +68,14 @@ PRICE_HEADER = (
 TRADE_HEADER = "timestamp;buyer;seller;symbol;currency;price;quantity"
 
 
-UPTREND_DAYS = {0, 4, 5, 6, 7, 8, 9, 10, 11, 12}  # IPR uptrend baseline for crash/FV test days
+UPTREND_DAYS = {0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}  # IPR uptrend baseline for crash/FV test days
+
+# Day 13 ASYM_OPEN parameters. Real 272466 day-1 opened with bid=9998/ask=10016
+# (mid=10007), 7 ticks above true FV=10000. v17's first-tick anchor snap
+# landed at 10008, causing 512 spurious crash_mode ticks. This regime
+# reproduces that open-book microstructure bias for testing.
+ASYM_OPEN_TICKS = 30        # ticks the biased open persists
+ASYM_OPEN_BIAS = 7.0        # mid offset above true FV during biased open
 
 
 def ipr_mid(tick: int, day: int, rng: random.Random) -> float:
@@ -103,6 +117,10 @@ _ACO_BASES: dict[int, "tuple[callable, float]"] = {
     10: (lambda t: 10_000.0 if t < 5000 else 9_990.0, 1.5),
     11: (lambda t: 10_000.0, 2.0),  # DEFENSE_BOT: signal in book, not mid
     12: (lambda t: 10_000.0, 2.0),  # VOLUME_BURST: signal in book, not mid
+    13: (                              # ASYM_OPEN: biased open book for first N ticks
+        lambda t: 10_000.0 + ASYM_OPEN_BIAS if t < ASYM_OPEN_TICKS else 10_000.0,
+        1.5,
+    ),
 }
 
 
@@ -261,6 +279,7 @@ REGIME_LABELS = [
     "UPTREND", "FLAT", "DOWNTREND", "REVERSAL",
     "ACO_CRASH", "ACO_FLASH", "PERMANENT", "CRASH_DEEP",
     "ALT_FV_HIGH", "ALT_FV_LOW", "MID_SHIFT", "DEFENSE_BOT", "VOLUME_BURST",
+    "ASYM_OPEN",
 ]
 
 

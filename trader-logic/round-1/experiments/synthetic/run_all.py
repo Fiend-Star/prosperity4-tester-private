@@ -21,13 +21,14 @@ _SEED_COUNT = int(_os.environ.get("SEEDS", "25"))
 SEEDS = [42 + 73 * i for i in range(_SEED_COUNT)]
 STRATEGIES = {
     "r1_v14_def": "trader-logic/round-1/r1_v14_defensive.py",
-    "r1_v16": "trader-logic/round-1/r1_v16.py",
     "r1_v17": "trader-logic/round-1/r1_v17.py",
+    "r1_v18": "trader-logic/round-1/r1_v18.py",
 }
 REGIMES = [
     "UPTREND", "FLAT", "DOWNTREND", "REVERSAL",
     "ACO_CRASH", "ACO_FLASH", "PERMANENT", "CRASH_DEEP",
     "ALT_FV_HIGH", "ALT_FV_LOW", "MID_SHIFT", "DEFENSE_BOT", "VOLUME_BURST",
+    "ASYM_OPEN",
 ]
 TICKS = 10_000
 
@@ -120,9 +121,9 @@ def main():
                 sig = "***" if abs(delta) > 2 * se else ("*" if abs(delta) > se else " ")
             print(f"  {REGIMES[day]:>10s}: {a_label}={a_m:>9,.0f}  {b_label}={b_m:>9,.0f}  delta={delta:+9,.0f}  SE={se:>5,.0f}  {sig}")
 
-    paired_delta("r1_v14_def", "r1_v16", "v14", "v16")
     paired_delta("r1_v14_def", "r1_v17", "v14", "v17")
-    paired_delta("r1_v16", "r1_v17", "v16", "v17")
+    paired_delta("r1_v14_def", "r1_v18", "v14", "v18")
+    paired_delta("r1_v17", "r1_v18", "v17", "v18")
 
 
 if __name__ == "__main__":
