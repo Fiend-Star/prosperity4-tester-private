@@ -2,7 +2,7 @@
 
 Complete reference for the `prosperity4bt` backtester in this repo. Written for someone new to GitHub, Python, and IMC Prosperity.
 
-**Scope:** 5 fill modes (`--match-mode`), 3 CSV trade modes (`--match-trades`), 11 CLI flags.
+**Scope:** 2 fill modes (`--match-mode`), 3 CSV trade modes (`--match-trades`), 11 CLI flags.
 
 ## Contents
 
@@ -206,7 +206,7 @@ python -m prosperity4bt <algorithm> <days> [OPTIONS]
 | `--data PATH` | built-in | Load CSVs from custom folder |
 | `--print` | off | Stream trader `print()` to stdout |
 | `--match-trades {all,worse,none}` | `all` | See below |
-| `--match-mode {default,strict,imc,sim,website}` | `default` | See §7 |
+| `--match-mode {default,imc}` | `default` | See §7 |
 | `--ticks N` | unlimited | Cap ticks per day (use 1000 for R1 tutorial, 10000 for full) |
 | `--iterations N` | None | Call `run()` only N times per day (between calls, orders rest). **Leave blank** — website calls every tick. |
 | `--no-progress` | off | Hide progress bar |
@@ -230,26 +230,25 @@ Use `worse`/`none` if your strategy reads `market_trades` as a signal (avoids fe
 
 ## 7. Match modes
 
-Five fill-simulation modes. Each has a tradeoff.
+Two fill-simulation modes. Each has a tradeoff.
 
 | Mode | How it fills | When to use | Known limitations |
 |------|-------------|-------------|-------------------|
-| `default` | `>=` price crossing + replay CSV trades against you | Quick upper-bound check | Overfills on crosses; overcounts CSV takers you'd have intercepted; no invisible-taker modeling |
-| `strict` | Exact `==` only, no CSV trades | Worst-case floor | Underestimates inside-spread MM — your best±1 quotes look like they earn nothing |
-| `imc` | `==` + calibrated per-product extra-taker (deterministic hash) | **Website ranking (recommended)** | Hardcoded `extra_rate` per product in `TAKER_PARAMS`; calibrated on 1k ticks only; deterministic means no seed variation; new products need refit |
-| `sim` | Full agent-based: MM book + Poisson taker with spread-decay | Stress testing | Non-deterministic; Poisson CoV=1.0 doesn't match real Round 1 CoV 0.76–0.81; no CSV trades consumed |
-| `website` | Detects takers from book structure (tight spread + asymmetry) + routes through unified book | Exploratory | Experimental; hardcoded thresholds from Round 0 forensics; can double-count if CSV trade + detection fire together |
+| `default` | `>=` price crossing + replay CSV trades against you | Quick upper-bound check, strategy ranking | Overfills on crosses; overcounts CSV takers you'd have intercepted; no invisible-taker modeling |
+| `imc` | `==` exact + calibrated per-product extra-taker (deterministic CRC32 hash) | **Website ranking (recommended)** | Hardcoded `extra_rate` per product in `TAKER_PARAMS`; calibrated on 1k ticks of one day; new products/rounds need refit via `trader-logic/round-2/calibrate_imc.py` |
 
-Universal limits (every mode): CSV is the market **without your orders** — any fill you'd induce on the website is either missing or approximated. Position resets to 0 each day. MM doesn't react to you. One-sided books (~9% of R1 ticks) pass through as-is — your strategy must handle empty-side cases.
+Universal limits (both modes): CSV is the market **without your orders** — any fill you'd induce on the website is either missing or approximated. Position resets to 0 each day. MM doesn't react to you. One-sided books (~9% of R1 ticks) pass through as-is — your strategy must handle empty-side cases.
 
-**Calibration snapshot (R1 day 0, 1k ticks, ACO product):**
+**Calibration snapshot (1k ticks, ACO product, deterministic imc):**
 
-| Mode | ACO local | vs website 3,091 |
-|------|----------:|-----------------:|
-| `default` / `strict` | 2,633 | −14.8% |
-| `imc` (extra_rate=0.064) | 3,122 | **+1.0%** |
-| `website` | ~3,050 | −1.3% |
-| `sim` | varies | ±5–10% stochastic |
+| Dataset | Mode | ACO local | Website | Error |
+|---------|------|----------:|--------:|------:|
+| R2 round98 (day 1) | `imc` (extra_rate=0.030) | 1,465 | 1,451 | **+1.0%** |
+| R2 round98 (day 1) | `default` | — | 1,451 | — |
+| R1 day 0 (tutorial) | `imc` (extra_rate=0.030) | 2,078 | 3,091 | −32.8% |
+| R1 day 0 (tutorial) | `default` | 2,282 | 3,091 | −26.2% |
+
+**Current params** (`prosperity4bt/tools/order_match_maker.py`): IPR extra_rate=0.0, ACO extra_rate=0.030 (R2-calibrated from submission 275130). R1 drifts because R1 day 0 has ~2× the inside-spread taker rate of R2 day 1 — per-round re-calibration is expected. Run `python trader-logic/round-2/calibrate_imc.py` to sweep.
 
 ---
 
@@ -281,7 +280,7 @@ Format is identical to the IMC website submission log, so any parser that handle
 3. Position limits enforced (**all-or-nothing per side**)
 4. Aggressive takes execute against MM levels
 5. Unfilled orders rest inside the spread
-6. Taker arrives (in `imc`/`sim`/`website`) — hits best bid/ask by price priority
+6. Taker arrives (in `imc` mode only) — hits our inside-spread resting orders if they improve MM's best
 7. Next tick
 
 ### Website vs backtester
@@ -299,7 +298,7 @@ Rules of thumb:
 
 - **Rankings preserved** across same-framework strategies.
 - **Inside-spread MM**: apply `website ≈ backtester × 1.07` (`default` mode).
-- **ACO-like stable products**: `--match-mode imc` → within 1.6%.
+- **ACO-like stable products**: `--match-mode imc` → within ~1% on the calibration day; re-fit per round.
 - **IPR is an inverse-indicator for framework changes.** Example: `r1_v3` (LU-on-IPR) ranked best locally but scored 7,975 on website (−2,650 regression vs r1_v4). Never trust an IPR framework win without submitting.
 - **Practical ceiling ~10,625**. Competitors also converged there — remaining gap to #1 (11,744) is likely seed variance.
 
@@ -342,7 +341,7 @@ Cross-validated on Round 1 day 0, 1k ticks — all agree on **ranking** despite 
 
 | Backtester | Lang | Install | Notes |
 |-----------|------|---------|-------|
-| **This repo** | Python | `git clone` | 5 match modes, calibrated `imc` |
+| **This repo** | Python | `git clone` | 2 match modes, calibrated `imc` |
 | [kevin-fu1/imc-prosperity-4-backtester](https://github.com/kevin-fu1/imc-prosperity-4-backtester) | Python | `git clone` | ≈18% higher absolute; matches our ranking |
 | [Xeeshan85/prosperity4btx](https://pypi.org/project/prosperity4btx/) | Python | `pip install prosperity4btx` | Same as Kevin, PyPI-published |
 | [GeyzsoN/prosperity_rust_backtester](https://github.com/GeyzsoN/prosperity_rust_backtester) | Rust | `cargo build --release` | Byte-identical scores to this repo, faster |
