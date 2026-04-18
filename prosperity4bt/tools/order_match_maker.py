@@ -14,9 +14,9 @@ from prosperity4bt.models.test_options import TradeMatchingMode, MatchMode
 # is the mechanism behind the website's extra fill count.
 TAKER_PARAMS = {
     "INTARIAN_PEPPER_ROOT": {"qty_range": (3, 17),
-                              "extra_rate": 0.0},   # R2 IPR BT 7,354 vs website 7,464 (1.5% err, no supplement needed)
+                              "extra_rate": 0.0},   # R2 IPR BT 7,403 vs website 7,386 (+0.2% err). 4 extra website fills are taker round-trips (+2 PnL net); no supplement needed.
     "ASH_COATED_OSMIUM": {"qty_range": (2, 10),
-                           "extra_rate": 0.030},    # R2-calibrated against round98 (submission 275130). R2 ACO BT 1,465 vs website 1,451 (1.0% err). R1 day 0 drifts ~32% at this rate — R1 used 0.064 pre-determinism fix; re-run calibrate_imc.py per round.
+                           "extra_rate": 0.038},    # R2-calibrated against round98 (submission 274128 data, 100% book match). ACO BT 1,004 vs website 1,026 (-2.2% err), total BT 8,407 vs website 8,412 (-0.1% err). Previous 0.030 was miscalibrated (used 274128 data vs 275130 target, -34.6% err).
 }
 
 

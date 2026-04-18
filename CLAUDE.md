@@ -108,7 +108,7 @@ class Trader:
 - **Round 1**: IPR BT ≈ real IPR within 0.2%; **ACO BT × 0.63 ≈ real ACO** for v17-style inside-spread MM (2.5× BT fill-rate overshoot).
 - **ACO BT gradient overshoots ~60×** — treat any ACO BT delta < 1,000 PnL as noise.
 - **Don't patch the backtester to match known scores** — overfitting the infrastructure.
-- **imc mode is deterministic** (CRC32 hash on product name, 2026-04-18 fix). Current calibration `extra_rate=0.030` for ACO fits R2 round98 within 1.0% (ACO BT 1,465 vs website 1,451). R1 day 0 drifts ~33% at this rate because R1 has ~2× R2's inside-spread taker rate; re-calibrate per round via `trader-logic/round-2/calibrate_imc.py`.
+- **imc mode is deterministic** (CRC32 hash on product+timestamp). Current calibration `extra_rate=0.038` for ACO fits R2 round98 within -2.2% ACO / -0.1% total (ACO BT 1,004 vs website 1,026; total BT 8,407 vs website 8,412). Previous 0.030 was miscalibrated (round98 CSV is submission 274128's data, not 275130's). IPR needs no supplement (+0.2% error). Re-calibrate per round if CSV source changes.
 - **CSV ≠ website** — R0 day 0 matches 100%; all other days and R1 all days do NOT. See `project_round1_final.md` for dev-vs-real calibration.
 
 Backtester bugs fixed 2026-03-21: stale `own_trades`/`market_trades` persistence between ticks; resting-order quantity not refreshed after partial fills; wrong iteration count for tutorial.
