@@ -108,20 +108,19 @@ sm = sum(cdf)
 # Normalize cdf
 cdf = [x / sm for x in cdf]
 
-best_speed = -1
+best_t = -1
 best_pnl = 0
 
-for speed in range(101):
-    r, s = speed_r_s_optimal[speed]
-    t = speed
+for t in range(101):
+    r, s = speed_r_s_optimal[t]
     research = 200000 * np.log(1+r) / np.log(1+100)
     scale =  7 * (s / 100)
     speed = 0.1 + 0.8 * sum(cdf[:t+1])
-    print('test', speed, sum(cdf[:t+1]))
     budget_used = 50000 * (r/100 + s/100 + t/100)
     pnl = (research * scale * speed) - budget_used
+    print('test', t, speed, sum(cdf[:t+1]), pnl)
     if pnl > best_pnl:
         best_pnl = pnl
-        best_speed = speed
+        best_t = t
 
-print(f"Best speed: {best_speed}, Best pnl: {best_pnl} for this simulated distribution")
+print(f"Best t: {best_t}, Best pnl: {best_pnl} for this simulated distribution")
