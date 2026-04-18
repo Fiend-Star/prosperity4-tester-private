@@ -9,7 +9,7 @@ __pycache__/
 *.zip
 run-logs/
 *tmp*.py
-.claude
+.claude/settings.local.json
 # Distribution / packaging
 .Python
 build/
