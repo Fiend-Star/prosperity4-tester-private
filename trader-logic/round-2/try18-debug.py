@@ -2,6 +2,7 @@ import json
 import jsonpickle
 import numpy as np
 import math
+import copy
 from typing import Any, List, Tuple, Dict
 
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
@@ -158,9 +159,9 @@ PARAMS = {
         "target_position": 0,     
     },
     Product.PEPPER: {
-        "take_width": 1.5,
-        "prevent_adverse": True,
-        "adverse_volume": 15,
+        "take_width": 0,          # Changed: Willing to buy up to exact fair value (no margin needed)
+        "prevent_adverse": False, # Changed: BE AGGRESSIVE. Don't run away from big blocks.
+        "adverse_volume": 15,     # (Now ignored due to False)
         "disregard_edge": 1,
         "join_edge": 0,
         "default_edge": 2,
@@ -339,17 +340,18 @@ class Trader:
             mid_price = (eff_ask + eff_bid) / 2
 
             # === Dynamic drift model ===
-
+            
             drift_per_tick = 0.1
-            total_ticks = 100000
-            ticks_remaining = max(0, total_ticks - state.timestamp)
+
+            # Since liquidity is scarce and the drift is deterministic, we enforce a massive
+            # urgency premium to make sure we actually get filled when our inventory is empty.
+            # Using 200 ticks of lookahead gives up to a +20 edge to our Fair Value.
+            urgency_lookahead = 200
 
             position_limit = self.LIMIT[Product.PEPPER]
-
             inventory_ratio = (position_limit - position) / position_limit
-            time_ratio = ticks_remaining / total_ticks
 
-            drift_boost = drift_per_tick * ticks_remaining * inventory_ratio * time_ratio
+            drift_boost = drift_per_tick * urgency_lookahead * inventory_ratio
 
             # === Inventory control ===
 
@@ -365,43 +367,6 @@ class Trader:
             return skewed_fair
 
         return None
-
-    '''def pepper_fair_value_long_biased(self, state: TradingState, traderObject: Dict, position: int) -> float:
-        order_depth = state.order_depths[Product.PEPPER]
-        if len(order_depth.sell_orders) != 0 and len(order_depth.buy_orders) != 0:
-            best_ask = min(order_depth.sell_orders.keys())
-            best_bid = max(order_depth.buy_orders.keys())
-            
-            filtered_ask = [
-                price for price in order_depth.sell_orders.keys()
-                if abs(order_depth.sell_orders[price]) >= self.params[Product.PEPPER]["adverse_volume"]
-            ]
-            filtered_bid = [
-                price for price in order_depth.buy_orders.keys()
-                if abs(order_depth.buy_orders[price]) >= self.params[Product.PEPPER]["adverse_volume"]
-            ]
-            
-            mm_ask = min(filtered_ask) if len(filtered_ask) > 0 else None
-            mm_bid = max(filtered_bid) if len(filtered_bid) > 0 else None
-            
-            eff_ask = mm_ask if mm_ask is not None else best_ask
-            eff_bid = mm_bid if mm_bid is not None else best_bid
-            
-            mmmid_price = (eff_ask + eff_bid) / 2
-
-            # Use the exaggerated drift value that produced massive holding PnL
-            drift_per_tick = 1
-            look_ahead_ticks = 10 
-            
-            expected_future_value = mmmid_price + drift_per_tick * look_ahead_ticks
-            
-            risk_aversion = self.params[Product.PEPPER]["risk_aversion"]
-            target_position = self.params[Product.PEPPER]["target_position"]
-            
-            skewed_fair = expected_future_value - (position - target_position) * risk_aversion
-            return skewed_fair
-            
-        return None'''
 
     def ash_fair_value_and_width(
         self,
@@ -615,6 +580,10 @@ class Trader:
         return orders, buy_order_volume, sell_order_volume
 
     def run(self, state: TradingState) -> Tuple[Dict[Symbol, List[Order]], int, str]:
+        # Isolate backtester simulation from our destructive modifications
+        original_order_depths = state.order_depths
+        state.order_depths = copy.deepcopy(original_order_depths)
+
         traderObject = {}
         if state.traderData is not None and state.traderData != "":
             traderObject = jsonpickle.decode(state.traderData)
@@ -625,6 +594,7 @@ class Trader:
             ash_position = state.position.get(Product.ASH, 0)
             
             fair_value, dynamic_width = self.ash_fair_value_and_width(state, traderObject, ash_position)
+            logger.print(f"ASH Fair Value: {fair_value:.4f} (width: {dynamic_width:.2f})")
             
             ash_take_orders, buy_order_volume, sell_order_volume = self.take_orders(
                 Product.ASH, state.order_depths[Product.ASH], fair_value, dynamic_width, ash_position,
@@ -635,6 +605,14 @@ class Trader:
             ash_make_orders, _, _ = self.make_orders(
                 Product.ASH, state.order_depths[Product.ASH], fair_value, ash_position, buy_order_volume, sell_order_volume, self.params[Product.ASH]["disregard_edge"], self.params[Product.ASH]["join_edge"], self.params[Product.ASH]["default_edge"],
             )
+
+            for order in ash_take_orders:
+                logger.print(f"ASH SWEEP {'BID' if order.quantity > 0 else 'ASK'}: {abs(order.quantity)}x @ {order.price}")
+            for order in ash_clear_orders:
+                logger.print(f"ASH CLEAR {'BID' if order.quantity > 0 else 'ASK'}: {abs(order.quantity)}x @ {order.price}")
+            for order in ash_make_orders:
+                logger.print(f"ASH PASSIVE_MAKE {'BID' if order.quantity > 0 else 'ASK'}: {abs(order.quantity)}x @ {order.price}")
+
             result[Product.ASH] = ash_take_orders + ash_clear_orders + ash_make_orders
 
 
@@ -646,6 +624,7 @@ class Trader:
             pepper_fair_value = self.pepper_fair_value_long_biased(state, traderObject, pepper_position)
             
             if pepper_fair_value is not None:
+                logger.print(f"PEPPER Fair Value: {pepper_fair_value:.4f}")
                 buy_order_volume = 0
                 sell_order_volume = 0
                 position_limit = self.LIMIT[Product.PEPPER]
@@ -656,37 +635,47 @@ class Trader:
                 
                 # 1. Cautious Take (Only snipes Asks if they are extremely cheap and small volume)
                 if len(order_depth.sell_orders) != 0:
-                    best_ask = min(order_depth.sell_orders.keys())
-                    best_ask_amount = -1 * order_depth.sell_orders[best_ask]
-                    
-                    # Core Safety: Do not smash into institutional walls (>15 units)
-                    if not prevent_adverse or abs(best_ask_amount) <= adverse_volume:
-                        if best_ask <= pepper_fair_value - take_width:
-                            quantity = min(best_ask_amount, position_limit - pepper_position)
+                    asks_sorted = sorted(list(order_depth.sell_orders.keys()))
+                    for ask_price in asks_sorted:
+                        ask_amount = -1 * order_depth.sell_orders[ask_price]
+                        
+                        # Core Safety: Do not smash into institutional walls (>15 units)
+                        if prevent_adverse and abs(ask_amount) > adverse_volume:
+                            break # Hitting a wall we won't cross
+                            
+                        if ask_price <= pepper_fair_value - take_width:
+                            quantity = min(ask_amount, position_limit - (pepper_position + buy_order_volume))
                             if quantity > 0:
-                                pepper_orders.append(Order(Product.PEPPER, best_ask, quantity))
+                                pepper_orders.append(Order(Product.PEPPER, ask_price, quantity))
+                                logger.print(f"PEPPER SWEEP_TAKE BID: {quantity}x @ {ask_price}")
                                 buy_order_volume += quantity
-                                order_depth.sell_orders[best_ask] += quantity
-                                if order_depth.sell_orders[best_ask] == 0:
-                                    del order_depth.sell_orders[best_ask]
+                                order_depth.sell_orders[ask_price] += quantity
+
+                        if buy_order_volume + pepper_position >= position_limit:
+                            break
 
                 # 1.5 Opportunistic Short (Take bids only if they go radically above fair value)
                 # Being cognizant that it goes up, we require a wider margin to short
                 sell_take_width = take_width * 2.5 
                 
                 if len(order_depth.buy_orders) != 0:
-                    best_bid = max(order_depth.buy_orders.keys())
-                    best_bid_amount = order_depth.buy_orders[best_bid]
-                    
-                    if not prevent_adverse or abs(best_bid_amount) <= adverse_volume:
-                        if best_bid >= pepper_fair_value + sell_take_width:
-                            quantity = min(best_bid_amount, position_limit + pepper_position)
+                    bids_sorted = sorted(list(order_depth.buy_orders.keys()), reverse=True)
+                    for bid_price in bids_sorted:
+                        bid_amount = order_depth.buy_orders[bid_price]
+                        
+                        if prevent_adverse and abs(bid_amount) > adverse_volume:
+                            break
+                            
+                        if bid_price >= pepper_fair_value + sell_take_width:
+                            quantity = min(bid_amount, position_limit + (pepper_position - sell_order_volume))
                             if quantity > 0:
-                                pepper_orders.append(Order(Product.PEPPER, best_bid, -quantity))
+                                pepper_orders.append(Order(Product.PEPPER, bid_price, -quantity))
+                                logger.print(f"PEPPER SWEEP_SHORT ASK: {quantity}x @ {bid_price}")
                                 sell_order_volume += quantity
-                                order_depth.buy_orders[best_bid] -= quantity
-                                if order_depth.buy_orders[best_bid] == 0:
-                                    del order_depth.buy_orders[best_bid]
+                                order_depth.buy_orders[bid_price] -= quantity
+
+                        if sell_order_volume - pepper_position >= position_limit:
+                            break
 
                 # 2. Cautious Make (Resting passive/penny bids for the rest of our capacity)
                 buy_quantity = position_limit - (pepper_position + buy_order_volume)
@@ -697,20 +686,15 @@ class Trader:
                 default_edge = self.params[Product.PEPPER]["default_edge"]
 
                 if buy_quantity > 0:
-                    bids_below_fair = [
-                        price for price in order_depth.buy_orders.keys()
-                        if price < pepper_fair_value - disregard_edge
-                    ]
-                    best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
+                    # AGGRESSIVE MAKE: Instead of pennying the lowest bid, aggressively penny the **ASK**.
+                    # Try to quote at best_ask - 1 to be the #1 priority buyer, but cap it at our fair value.
+                    best_ask = min(order_depth.sell_orders.keys()) if len(order_depth.sell_orders) > 0 else 1000000
                     
-                    bid_price = round(pepper_fair_value - default_edge)
-                    if best_bid_below_fair is not None:
-                        if abs(pepper_fair_value - best_bid_below_fair) <= join_edge:
-                            bid_price = best_bid_below_fair # Join securely
-                        else:
-                            bid_price = best_bid_below_fair + 1 # Penny tight
+                    # We want to be best_ask - 1, bounded by our fair value
+                    bid_price = min(best_ask - 1, math.floor(pepper_fair_value))
                             
                     pepper_orders.append(Order(Product.PEPPER, bid_price, buy_quantity))
+                    logger.print(f"PEPPER AGGRESSIVE_MAKE BID: {buy_quantity}x @ {bid_price}")
 
                 # (Passive Asks were removed because they caused premature offloading in an upward trending market)
                     
@@ -720,4 +704,8 @@ class Trader:
         trader_data = jsonpickle.encode(traderObject)
 
         logger.flush(state, result, conversions, trader_data)
+        
+        # Restore the unmutated order books for the backtester
+        state.order_depths = original_order_depths
+        
         return result, conversions, trader_data
