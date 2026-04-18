@@ -13,4 +13,3 @@
 - [project_tomatoes_eda.md](project_tomatoes_eda.md) — Round 0 cross-round insights (7 reusable lessons); details in CLAUDE.md
 - [feedback_backtester.md](feedback_backtester.md) — Local BT ≠ website. Use for ranking only. Trust IPR gradient, not ACO (60× overshoot)
 - [feedback_drawdown_misconception.md](feedback_drawdown_misconception.md) — Drift-product drawdowns are entry-cost, not a bug. Eliminating costs PnL
-- [user_profile.md](user_profile.md) — User preferences and working style
