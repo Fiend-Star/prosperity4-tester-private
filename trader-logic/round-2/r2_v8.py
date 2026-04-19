@@ -1,15 +1,11 @@
 import json
-from datamodel import Order, TradingState
+import math
+import numpy as np
+from datamodel import Order, OrderDepth, TradingState
 
 LIMIT = 80
 
-# --- IPR Parameters ---
-IPR = "INTARIAN_PEPPER_ROOT"
-IPR_TARGET_POS = 20    # Asset drifts up, maintain a base long position
-EMA_ALPHA = 0.2        # Smooths price without the heavy OLS array
-SPREAD_HALF = 7        # Base spread edge (average 14 ticks / 2)
-
-# --- ACO Parameters ---
+# --- ACO Parameters (LU-style, kept from v8 — slightly better than r1_final's ACO) ---
 ACO = "ASH_COATED_OSMIUM"
 ACO_FV = 10000
 ACO_TAKE_WIDTH = 1
@@ -18,13 +14,49 @@ ACO_JOIN_EDGE = 2
 ACO_DEFAULT_EDGE = 4
 ACO_ADVERSE_VOL = 15
 
+# --- IPR Parameters (from 228959 trend-following via r1_final) ---
+IPR = "INTARIAN_PEPPER_ROOT"
+PEPPER_SPREAD_GRADIENT = 0.0010586880760
+PEPPER_SPREAD_INTERCEPT = 0.8694130152902
+
 
 class Trader:
-    def __init__(self):
-        self.ipr_ema = None
+    def bid(self):
+        return 2000
+
+    # ═══ Helpers ═══
+
+    @staticmethod
+    def _regression_slope(prices):
+        x = np.arange(len(prices))
+        y = np.array(prices)
+        x_mean = np.mean(x)
+        y_mean = np.mean(y)
+        denom = np.sum((x - x_mean) ** 2)
+        if denom == 0:
+            return 0.0
+        return float(np.sum((x - x_mean) * (y - y_mean)) / denom)
+
+    @staticmethod
+    def _wall_mid(book: OrderDepth):
+        """Mid of the largest-volume bid and ask levels."""
+        best_vol, deep_bid = 0, 0
+        for price, vol in book.buy_orders.items():
+            if vol > best_vol:
+                best_vol = vol
+                deep_bid = price
+
+        best_vol, deep_ask = 0, 0
+        for price, vol in book.sell_orders.items():
+            if vol < best_vol:
+                best_vol = vol
+                deep_ask = price
+
+        return (deep_bid + deep_ask) / 2
+
+    # ═══ ACO: LU take/make (unchanged from v8) ═══
 
     def _aco(self, state):
-        """Pure MM/MT for ACO. No forced liquidation."""
         book = state.order_depths[ACO]
         if not (book.buy_orders or book.sell_orders):
             return []
@@ -35,7 +67,7 @@ class Trader:
         sell_cap = LIMIT + pos
         orders = []
 
-        # --- 1. Aggressive Taker Logic ---
+        # --- Aggressive takes ---
         for price, vol in sorted(book.sell_orders.items()):
             if buy_cap <= 0 or price > fv - ACO_TAKE_WIDTH:
                 break
@@ -54,7 +86,7 @@ class Trader:
             orders.append(Order(ACO, price, -qty))
             sell_cap -= qty
 
-        # --- 2. Passive Maker Logic ---
+        # --- Passive maker ---
         asks_above = [p for p in book.sell_orders if p > fv + ACO_DISREGARD_EDGE]
         bids_below = [p for p in book.buy_orders if p < fv - ACO_DISREGARD_EDGE]
 
@@ -70,7 +102,6 @@ class Trader:
         else:
             bid_price = round(fv - ACO_DEFAULT_EDGE)
 
-        # Safety check
         if bid_price >= ask_price:
             ask_price = bid_price + 1
 
@@ -81,89 +112,121 @@ class Trader:
 
         return orders
 
-    def _ipr(self, state):
-        """Micro-structure MT/MM for IPR. Biased long for macro drift."""
-        book = state.order_depths[IPR]
-        bids = sorted(book.buy_orders.items(), reverse=True) 
-        asks = sorted(book.sell_orders.items()) 
+    # ═══ IPR: 228959 trend-following (target=80, wall-mid, aggressive crossing) ═══
 
-        if not (bids and asks):
-            return []
-
-        pos = state.position.get(IPR, 0)
-        buy_cap = LIMIT - pos
-        sell_cap = LIMIT + pos
+    def _ipr(self, book: OrderDepth, pos, prev_mids, slope, directions):
         orders = []
 
-        best_bid, bid_vol_1 = bids[0]
-        best_ask, ask_vol_1 = asks[0]
-        ask_vol_1 = abs(ask_vol_1) # Standardize to positive for OBI math
+        wall_mid = prev_mids[-1] + slope if prev_mids else 10000
+        best_ask = best_bid = None
+        ask_quantity = bid_quantity = 0
 
-        l1_mid = (best_bid + best_ask) / 2.0
+        if book.buy_orders and book.sell_orders:
+            wall_mid = self._wall_mid(book)
+            best_ask = min(book.sell_orders)
+            ask_quantity = book.sell_orders[best_ask]          # negative
+            best_bid = max(book.buy_orders)
+            bid_quantity = book.buy_orders[best_bid]
+        elif book.sell_orders:
+            best_ask = min(book.sell_orders)
+            ask_quantity = book.sell_orders[best_ask]
+        elif book.buy_orders:
+            best_bid = max(book.buy_orders)
+            bid_quantity = book.buy_orders[best_bid]
 
-        # Update EMA
-        if self.ipr_ema is None:
-            self.ipr_ema = l1_mid
+        # Maintain 5-tick wall-mid history
+        prev_mids = [wall_mid] if prev_mids is None else prev_mids + [wall_mid]
+        if len(prev_mids) > 5:
+            prev_mids.pop(0)
+            slope = self._regression_slope(prev_mids)
         else:
-            self.ipr_ema = (l1_mid * EMA_ALPHA) + (self.ipr_ema * (1 - EMA_ALPHA))
+            slope = 0
 
-        # Calculate Signals
-        total_vol = bid_vol_1 + ask_vol_1
-        obi = (bid_vol_1 - ask_vol_1) / total_vol if total_vol > 0 else 0
+        # 20-tick direction history → trend indicator
+        trend = 1 if slope >= 0 else -1
+        directions = [trend] if directions is None else directions + [trend]
+        if len(directions) > 20:
+            directions.pop(0)
+        indicator = directions.count(1) / len(directions)
 
-        l2_div = 0
-        if len(bids) > 1 and len(asks) > 1:
-            l2_mid = (bids[1][0] + asks[1][0]) / 2.0
-            l2_div = l2_mid - l1_mid
+        buy_cap = LIMIT - pos
+        sell_cap = LIMIT + pos
 
-        # --- 1. Aggressive Taker Logic ---
-        # If L1 OBI is heavily skewed Bid OR L2 is dragging price up, cross the spread
-        if obi > 0.7 or l2_div > 2:
-            qty = min(buy_cap, ask_vol_1)
-            if qty > 0:
-                orders.append(Order(IPR, best_ask, qty))
-                buy_cap -= qty
-        
-        # --- 2. Passive Maker Logic ---
-        pos_offset = pos - IPR_TARGET_POS
-        
-        # Skew shifts quotes down if inventory is high, up if inventory is low
-        skew = pos_offset / 20.0  
+        mid_spread = (PEPPER_SPREAD_GRADIENT * wall_mid + PEPPER_SPREAD_INTERCEPT) / 2
 
-        bid_price = round(l1_mid - SPREAD_HALF - skew)
-        ask_price = round(l1_mid + SPREAD_HALF - skew)
+        if indicator >= 0.5:
+            # === UPTREND: go max long ===
+            target = 80
 
-        # Safety: keep quotes outside the immediate L1 spread
-        bid_price = min(bid_price, best_bid + 1)
-        ask_price = max(ask_price, best_ask - 1)
-        if bid_price >= ask_price:
-            ask_price = bid_price + 1
+            if pos <= 0.9 * target and len(prev_mids) == 5:
+                # Aggressive lift: cross the spread to build position FAST
+                fair_purchase = math.floor(wall_mid + mid_spread)
+                best_ask = min(best_ask, fair_purchase) if best_ask else fair_purchase
+                orders.append(Order(IPR, best_ask, buy_cap))
 
-        # Asymmetric Sizing: Post heavier on the bid to accumulate the long position
-        if buy_cap > 0:
-            orders.append(Order(IPR, bid_price, buy_cap))
-        
-        if sell_cap > 0:
-            # Offer less Ask liquidity when we want to build our long position
-            offer_qty = max(1, sell_cap // 2) if pos < IPR_TARGET_POS else sell_cap
-            orders.append(Order(IPR, ask_price, -offer_qty))
+            elif pos < target:
+                # Careful accumulation: take at/below wall_mid, passive penny
+                if best_ask and best_ask <= wall_mid:
+                    buy_qty = min(buy_cap, -ask_quantity)
+                    orders.append(Order(IPR, best_ask, buy_qty))
+                    buy_cap -= buy_qty
+                if best_bid and best_bid < wall_mid - mid_spread / 2:
+                    orders.append(Order(IPR, best_bid + 1, buy_cap))
 
-        return orders
+            elif best_ask and best_ask > wall_mid + mid_spread / 2:
+                # At target: sell only at premium
+                orders.append(Order(IPR, best_ask - 1, -sell_cap))
+
+        else:
+            # === DOWNTREND: go max short ===
+            target = -80
+
+            # Note: len(prev_mids)==10 is never true (capped at 5).
+            # This is an intentional long-bias from 228959 — aggressive short never fires.
+            if pos >= 0.9 * target and len(prev_mids) == 10:
+                if best_bid:
+                    orders.append(Order(IPR, best_bid, -sell_cap))
+                else:
+                    orders.append(Order(IPR, math.floor(wall_mid - mid_spread), -sell_cap))
+
+            elif pos > target:
+                if best_bid and best_bid >= wall_mid:
+                    sell_qty = min(sell_cap, bid_quantity)
+                    orders.append(Order(IPR, best_bid, -sell_qty))
+                    sell_cap -= sell_qty
+                if best_ask and best_ask > wall_mid + mid_spread / 2:
+                    orders.append(Order(IPR, best_ask - 1, -sell_cap))
+
+            elif best_bid and best_bid < wall_mid - mid_spread / 2:
+                orders.append(Order(IPR, best_bid + 1, buy_cap))
+
+        return orders, prev_mids, slope, directions
+
+    # ═══ Main ═══
 
     def run(self, state: TradingState):
-        saved = json.loads(state.traderData) if state.traderData else None
-        if saved and isinstance(saved, dict):
-            self.ipr_ema = saved.get("ema", None)
+        saved = json.loads(state.traderData) if state.traderData else {}
+        if not isinstance(saved, dict):
+            saved = {}
 
         result = {}
-        
+
+        # ACO
         if ACO in state.order_depths:
             result[ACO] = self._aco(state)
-            
-        if IPR in state.order_depths:
-            result[IPR] = self._ipr(state)
 
-        return result, 0, json.dumps(
-            {"ema": self.ipr_ema},
-            separators=(",", ":")
-        )
+        # IPR
+        if IPR in state.order_depths:
+            orders, mids, slope, dirs = self._ipr(
+                state.order_depths[IPR],
+                state.position.get(IPR, 0),
+                saved.get("mids"),
+                saved.get("slope", 0),
+                saved.get("dirs"),
+            )
+            result[IPR] = orders
+            saved["mids"] = mids
+            saved["slope"] = slope
+            saved["dirs"] = dirs
+
+        return result, 0, json.dumps(saved, separators=(",", ":"))

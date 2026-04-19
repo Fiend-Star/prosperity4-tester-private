@@ -1,203 +1,262 @@
+# Strategy 1: Combined
+# Pepper from 228959 (Nancy's trend-following, original params/bugs) + Osmium from 145452
+#
+# Osmium uses 145452 (structurally proven, no overfit to 3-day sample):
+#   - FV=10000 is the true mean (verified: zero drift across all days)
+#   - Multi-level sweep, inclusive taking at FV, liquidation mechanism
+#   - No directional model on a driftless product = no spurious bets
+#
+# Pepper is unmodified 228959 — serves as baseline to isolate pepper fix impact
+# when compared against strategy_improved.py
+
+from datamodel import OrderDepth, TradingState, Order
+import numpy as np
+import math
 import json
-from datamodel import Order, TradingState
 
-"""
-r1_medallion — Round 1 Strategy (website: 10,445)
+## ═══ POSITION LIMITS ═══
+POS_LIMITS = {
+    "ASH_COATED_OSMIUM": 80,
+    "INTARIAN_PEPPER_ROOT": 80
+}
 
-IPR: Deterministic +100/1k drift. Buy 80 units immediately, hold.
-  FV = microprice_regression + 5 (drift bias). Buy at FV+2, sell at FV+3.
-  Ablation: drift bias = 35% of PnL. Trade flow, OBI, carry = 0%.
-
-ACO: O-U mean-reversion to FV=10000. Post best+-1, take at FV.
-  101 fills/1k ticks: 59 strategy-independent (invisible takers),
-  38 book takes, 4 one-sided. Posting width has zero effect (probe-confirmed).
-
-bid() returns 15 for Round 1 manual auction.
-"""
-
-# ═══ IPR CONFIG ═══
-IPR = "INTARIAN_PEPPER_ROOT"
-IPR_LIMIT = 80
-IPR_COEFS = [0.2474, 0.2529, 0.2412, 0.2585]
-IPR_INTERCEPT = 0.2078
-IPR_LAGS = 4
-IPR_DRIFT_BIAS = 5.0
-IPR_BUY_SLACK = 2
-IPR_SELL_SLACK = 3
-
-# ═══ ACO CONFIG ═══
-ACO = "ASH_COATED_OSMIUM"
-ACO_LIMIT = 80
+## ═══ OSMIUM PARAMS (145452 — structurally proven) ═══
 ACO_FV = 10000
 ACO_AGGRESSION_THRESHOLD = 40
 ACO_LIQUIDATION_WINDOW = 10
 
+## ═══ PEPPER PARAMS (from 228959 — original, unfixed) ═══
+PEPPER_PARAMS = {
+    "spread_gradient": 0.0010586880760,
+    "spread_intercept": 0.8694130152902
+}
+
 
 class Trader:
-    def __init__(self):
-        self.ipr_mp = []
-        self.aco_liq = []
 
-    def bid(self):
-        return 15
+    ## ═══ REGRESSION SLOPE ═══
+    def regression_slope(self, prices):
+        x = np.arange(len(prices))
+        y = np.array(prices)
+        x_mean = np.mean(x)
+        y_mean = np.mean(y)
+        denom = np.sum((x - x_mean) ** 2)
+        if denom == 0:
+            return 0.0
+        slope = np.sum((x - x_mean) * (y - y_mean)) / denom
+        return slope
 
-    def run(self, state: TradingState):
-        saved = json.loads(state.traderData) if state.traderData else None
-        if saved:
-            self.ipr_mp = saved.get("m", [])
-            self.aco_liq = saved.get("l", [])
+    ## ═══ WALL-MID ═══
+    def get_wall_mid(self, order_depth: OrderDepth):
+        best_vol = 0
+        deep_bid = 0
+        for bid in order_depth.buy_orders:
+            if order_depth.buy_orders[bid] > best_vol:
+                best_vol = order_depth.buy_orders[bid]
+                deep_bid = bid
 
-        result = {}
-        conversions = 0
+        best_vol = 0
+        deep_ask = 0
+        for ask in order_depth.sell_orders:
+            if order_depth.sell_orders[ask] < best_vol:
+                best_vol = order_depth.sell_orders[ask]
+                deep_ask = ask
 
-        # ═══ ACO: take at FV, post best+-1 ═══
-        if ACO in state.order_depths:
-            book = state.order_depths[ACO]
-            has_bids = bool(book.buy_orders)
-            has_asks = bool(book.sell_orders)
+        return (deep_bid + deep_ask) / 2
 
-            if has_bids or has_asks:
-                orders = []
-                pos = state.position.get(ACO, 0)
-                buy_cap = ACO_LIMIT - pos
-                sell_cap = ACO_LIMIT + pos
-                fv = ACO_FV
-                best_bid = max(book.buy_orders) if has_bids else None
-                best_ask = min(book.sell_orders) if has_asks else None
+    ## ═══ ASH_COATED_OSMIUM — 145452 architecture ═══
+    def _trade_osmium(self, product, order_depth, pos, limit, aco_liq):
+        orders = []
+        book = order_depth
+        has_bids = bool(book.buy_orders)
+        has_asks = bool(book.sell_orders)
 
-                # Position-limit tracker
-                self.aco_liq.append(abs(pos) == ACO_LIMIT)
-                if len(self.aco_liq) > ACO_LIQUIDATION_WINDOW:
-                    self.aco_liq = self.aco_liq[-ACO_LIQUIDATION_WINDOW:]
-                soft = (len(self.aco_liq) == ACO_LIQUIDATION_WINDOW
-                        and sum(self.aco_liq) >= 5 and self.aco_liq[-1])
-                hard = (len(self.aco_liq) == ACO_LIQUIDATION_WINDOW
-                        and all(self.aco_liq))
+        if not (has_bids or has_asks):
+            return orders, aco_liq
 
-                max_buy = fv if pos <= ACO_AGGRESSION_THRESHOLD else fv - 1
-                min_sell = fv if pos >= -ACO_AGGRESSION_THRESHOLD else fv + 1
+        buy_cap = limit - pos
+        sell_cap = limit + pos
+        fv_int = ACO_FV
 
-                # Take
-                if has_asks:
-                    for price, vol in sorted(book.sell_orders.items()):
-                        if buy_cap > 0 and price <= max_buy:
-                            qty = min(buy_cap, -vol)
-                            orders.append(Order(ACO, price, qty))
-                            buy_cap -= qty
+        best_bid = max(book.buy_orders) if has_bids else None
+        best_ask = min(book.sell_orders) if has_asks else None
 
-                if has_bids:
-                    for price, vol in sorted(book.buy_orders.items(), reverse=True):
-                        if sell_cap > 0 and price >= min_sell:
-                            qty = min(sell_cap, vol)
-                            orders.append(Order(ACO, price, -qty))
-                            sell_cap -= qty
+        # Liquidation tracking
+        aco_liq.append(abs(pos) == limit)
+        if len(aco_liq) > ACO_LIQUIDATION_WINDOW:
+            aco_liq = aco_liq[-ACO_LIQUIDATION_WINDOW:]
+        soft = (len(aco_liq) == ACO_LIQUIDATION_WINDOW
+                and sum(aco_liq) >= 5 and aco_liq[-1])
+        hard = (len(aco_liq) == ACO_LIQUIDATION_WINDOW
+                and all(aco_liq))
 
-                # Liquidation
-                if buy_cap > 0 and hard:
-                    orders.append(Order(ACO, fv, buy_cap // 2))
-                    buy_cap -= buy_cap // 2
-                if buy_cap > 0 and soft:
-                    orders.append(Order(ACO, fv - 2, buy_cap // 2))
-                    buy_cap -= buy_cap // 2
-                if sell_cap > 0 and hard:
-                    orders.append(Order(ACO, fv, -(sell_cap // 2)))
-                    sell_cap -= sell_cap // 2
-                if sell_cap > 0 and soft:
-                    orders.append(Order(ACO, fv + 2, -(sell_cap // 2)))
-                    sell_cap -= sell_cap // 2
+        # Position-aware aggression (inclusive at FV when inventory is low)
+        max_buy = fv_int if pos <= ACO_AGGRESSION_THRESHOLD else fv_int - 1
+        min_sell = fv_int if pos >= -ACO_AGGRESSION_THRESHOLD else fv_int + 1
 
-                # Post
-                if has_bids and has_asks:
-                    if buy_cap > 0:
-                        orders.append(Order(ACO, min(fv - 1, best_bid + 1, best_ask - 1), buy_cap))
-                    if sell_cap > 0:
-                        orders.append(Order(ACO, max(fv + 1, best_ask - 1, best_bid + 1), -sell_cap))
-                elif has_bids:
-                    if buy_cap > 0:
-                        orders.append(Order(ACO, min(fv - 1, best_bid + 1), buy_cap))
-                    if sell_cap > 0:
-                        orders.append(Order(ACO, fv + 1, -sell_cap))
-                elif has_asks:
-                    if sell_cap > 0:
-                        orders.append(Order(ACO, max(fv + 1, best_ask - 1), -sell_cap))
-                    if buy_cap > 0:
-                        orders.append(Order(ACO, fv - 1, buy_cap))
+        # Multi-level sweep: take all asks ≤ max_buy
+        if has_asks:
+            for price, vol in sorted(book.sell_orders.items()):
+                if buy_cap > 0 and price <= max_buy:
+                    qty = min(buy_cap, -vol)
+                    orders.append(Order(product, price, qty))
+                    buy_cap -= qty
 
-                result[ACO] = orders
+        # Multi-level sweep: take all bids ≥ min_sell
+        if has_bids:
+            for price, vol in sorted(book.buy_orders.items(), reverse=True):
+                if sell_cap > 0 and price >= min_sell:
+                    qty = min(sell_cap, vol)
+                    orders.append(Order(product, price, -qty))
+                    sell_cap -= qty
 
-        # ═══ IPR: drift capture via microprice regression + bias ═══
-        if IPR in state.order_depths:
-            book = state.order_depths[IPR]
-            has_bids = bool(book.buy_orders)
-            has_asks = bool(book.sell_orders)
+        # Liquidation: hard = at FV, soft = near FV
+        if buy_cap > 0 and hard:
+            orders.append(Order(product, fv_int, buy_cap // 2))
+            buy_cap -= buy_cap // 2
+        if buy_cap > 0 and soft:
+            orders.append(Order(product, fv_int - 2, buy_cap // 2))
+            buy_cap -= buy_cap // 2
+        if sell_cap > 0 and hard:
+            orders.append(Order(product, fv_int, -(sell_cap // 2)))
+            sell_cap -= sell_cap // 2
+        if sell_cap > 0 and soft:
+            orders.append(Order(product, fv_int + 2, -(sell_cap // 2)))
+            sell_cap -= sell_cap // 2
 
-            if has_bids or has_asks:
-                orders = []
-                best_bid = max(book.buy_orders) if has_bids else None
-                best_ask = min(book.sell_orders) if has_asks else None
-                pos = state.position.get(IPR, 0)
+        # Market making around FV
+        if has_bids and has_asks:
+            if buy_cap > 0:
+                bp = min(fv_int - 1, best_bid + 1, best_ask - 1)
+                orders.append(Order(product, bp, buy_cap))
+            if sell_cap > 0:
+                ap = max(fv_int + 1, best_ask - 1, best_bid + 1)
+                orders.append(Order(product, ap, -sell_cap))
+        elif has_bids:
+            if buy_cap > 0:
+                orders.append(Order(product, min(fv_int - 1, best_bid + 1), buy_cap))
+            if sell_cap > 0:
+                orders.append(Order(product, fv_int + 1, -sell_cap))
+        elif has_asks:
+            if sell_cap > 0:
+                orders.append(Order(product, max(fv_int + 1, best_ask - 1), -sell_cap))
+            if buy_cap > 0:
+                orders.append(Order(product, fv_int - 1, buy_cap))
 
-                if has_bids and has_asks:
-                    mid = (best_bid + best_ask) * 0.5
-                    total_bv = sum(book.buy_orders.values())
-                    total_av = sum(-v for v in book.sell_orders.values())
-                    mp = (best_bid + (total_bv / (total_bv + total_av)) * (best_ask - best_bid)
-                          if (total_bv + total_av) > 0 else mid)
+        return orders, aco_liq
 
-                    hist = self.ipr_mp
-                    if len(hist) >= IPR_LAGS:
-                        hist = hist[1:]
-                    hist.append(mp)
-                    self.ipr_mp = hist
+    ## ═══ INTARIAN_PEPPER_ROOT — 228959's trend-following (original, unfixed) ═══
+    def _trade_pepper(self, product, order_depth, pos, limit, prev_mids, slope, directions):
+        orders = []
 
-                    if len(hist) == IPR_LAGS:
-                        fv = IPR_INTERCEPT + sum(c * x for c, x in zip(IPR_COEFS, hist))
-                    else:
-                        fv = mp
+        wall_mid = prev_mids[-1] + slope if prev_mids is not None else 10000
+        best_ask = best_bid = None
 
-                    fv += IPR_DRIFT_BIAS
-                    fv_int = round(fv)
+        if order_depth.buy_orders and order_depth.sell_orders:
+            wall_mid = self.get_wall_mid(order_depth)
+            best_ask, ask_quantity = list(order_depth.sell_orders.items())[0]
+            best_bid, bid_quantity = list(order_depth.buy_orders.items())[0]
+        elif order_depth.sell_orders:
+            best_ask, ask_quantity = list(order_depth.sell_orders.items())[0]
+        elif order_depth.buy_orders:
+            best_bid, bid_quantity = list(order_depth.buy_orders.items())[0]
 
-                    buy_cap = IPR_LIMIT - pos
-                    sell_cap = IPR_LIMIT + pos
+        prev_mids = [wall_mid] if prev_mids is None else prev_mids + [wall_mid]
+        if len(prev_mids) > 5:
+            prev_mids.pop(0)
+            slope = self.regression_slope(prev_mids)
+        else:
+            slope = 0
 
-                    # Asymmetric takes
-                    for price, vol in sorted(book.sell_orders.items()):
-                        if buy_cap > 0 and price <= fv_int + IPR_BUY_SLACK:
-                            qty = min(buy_cap, -vol)
-                            orders.append(Order(IPR, price, qty))
-                            buy_cap -= qty
+        trend = 1 if slope >= 0 else -1
+        directions = [trend] if directions is None else directions + [trend]
+        if len(directions) > 20:
+            directions.pop(0)
+        indicator = directions.count(1) / len(directions)
 
-                    for price, vol in sorted(book.buy_orders.items(), reverse=True):
-                        if sell_cap > 0 and price >= fv_int + IPR_SELL_SLACK:
-                            qty = min(sell_cap, vol)
-                            orders.append(Order(IPR, price, -qty))
-                            sell_cap -= qty
+        buy_cap = limit - pos
+        sell_cap = limit + pos
 
-                    # Post: aggressive bid, defensive ask
-                    if buy_cap > 0:
-                        orders.append(Order(IPR, min(fv_int - 1, best_bid + 1, best_ask - 1), buy_cap))
-                    if sell_cap > 0:
-                        orders.append(Order(IPR, max(fv_int + 2, best_ask - 1, best_bid + 1), -sell_cap))
+        m = PEPPER_PARAMS.get("spread_gradient")
+        c = PEPPER_PARAMS.get("spread_intercept")
+        mid_spread = (m * wall_mid + c) / 2
 
+        if indicator >= 0.5:
+            target = 80
+
+            if pos <= 0.9 * target and len(prev_mids) == 5:
+                fair_purchase = math.floor(wall_mid + mid_spread)
+                best_ask = min(best_ask, fair_purchase) if best_ask else fair_purchase
+                orders.append(Order(product, best_ask, buy_cap))
+
+            elif pos < target:
+                if best_ask and best_ask <= wall_mid:
+                    buy_quantity = min(buy_cap, -ask_quantity)
+                    orders.append(Order(product, best_ask, buy_quantity))
+                    buy_cap -= buy_quantity
+                if best_bid and best_bid < wall_mid - mid_spread / 2:
+                    orders.append(Order(product, best_bid + 1, buy_cap))
+
+            elif best_ask and best_ask > wall_mid + mid_spread / 2:
+                orders.append(Order(product, best_ask - 1, -sell_cap))
+
+        else:
+            target = -80
+
+            if pos >= 0.9 * target and len(prev_mids) == 10:
+                if best_bid:
+                    orders.append(Order(product, best_bid, -sell_cap))
                 else:
-                    # One-sided book
-                    buy_cap = IPR_LIMIT - pos
-                    sell_cap = IPR_LIMIT + pos
-                    if has_bids and not has_asks:
-                        if buy_cap > 0:
-                            orders.append(Order(IPR, best_bid + 1, buy_cap))
-                        if sell_cap > 0:
-                            orders.append(Order(IPR, best_bid + 14, -sell_cap))
-                    elif has_asks and not has_bids:
-                        if buy_cap > 0:
-                            orders.append(Order(IPR, best_ask - 14, buy_cap))
-                        if sell_cap > 0:
-                            orders.append(Order(IPR, best_ask - 1, -sell_cap))
+                    orders.append(Order(product, math.floor(wall_mid - mid_spread), -sell_cap))
 
-                result[IPR] = orders
+            elif pos > target:
+                if best_bid and best_bid >= wall_mid:
+                    sell_quantity = min(sell_cap, bid_quantity)
+                    orders.append(Order(product, best_bid, -sell_quantity))
+                    sell_cap -= sell_quantity
+                if best_ask and best_ask > wall_mid + mid_spread / 2:
+                    orders.append(Order(product, best_ask - 1, -sell_cap))
 
-        return result, conversions, json.dumps(
-            {"m": self.ipr_mp, "l": self.aco_liq},
-            separators=(",", ":")
-        )
+            elif best_bid and best_bid < wall_mid - mid_spread / 2:
+                orders.append(Order(product, best_bid + 1, buy_cap))
+
+        return orders, prev_mids, slope, directions
+
+    ## ═══ RUN ═══
+    def run(self, state: TradingState):
+        result = {}
+
+        pstate: dict = {}
+        if state.traderData:
+            try:
+                pstate = json.loads(state.traderData)
+            except Exception:
+                pstate = {}
+
+        for product, order_depth in state.order_depths.items():
+            position = state.position.get(product, 0)
+            limit = POS_LIMITS.get(product, 20)
+
+            if product == "ASH_COATED_OSMIUM":
+                aco_liq = pstate.get("ACO_LIQ", [])
+                orders, aco_liq = self._trade_osmium(product, order_depth, position, limit, aco_liq)
+                pstate["ACO_LIQ"] = aco_liq
+
+            elif product == "INTARIAN_PEPPER_ROOT":
+                prev_mids = pstate.get("PREV_PEPPER_MIDS")
+                prev_slope = pstate.get("PEPPER_SLOPE")
+                prev_directions = pstate.get("PEPPER_DIRECTIONS")
+                orders, pepper_mids, slope, directions = self._trade_pepper(
+                    product, order_depth, position, limit, prev_mids, prev_slope, prev_directions
+                )
+                pstate["PREV_PEPPER_MIDS"] = pepper_mids
+                pstate["PEPPER_SLOPE"] = slope
+                pstate["PEPPER_DIRECTIONS"] = directions
+
+            else:
+                orders = []
+
+            result[product] = orders
+
+        conversions = 0
+        return result, conversions, json.dumps(pstate)
