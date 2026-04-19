@@ -159,9 +159,9 @@ PARAMS = {
         "target_position": 0,     
     },
     Product.PEPPER: {
-        "take_width": 0,          # Changed: Willing to buy up to exact fair value (no margin needed)
+        "take_width": 2,          # Reduced: Now works cleanly with a smaller drift urgency
         "prevent_adverse": False, # Changed: BE AGGRESSIVE. Don't run away from big blocks.
-        "adverse_volume": 15,     # (Now ignored due to False)
+        "adverse_volume": 15,     
         "disregard_edge": 1,
         "join_edge": 0,
         "default_edge": 2,
@@ -343,10 +343,9 @@ class Trader:
             
             drift_per_tick = 0.1
 
-            # Since liquidity is scarce and the drift is deterministic, we enforce a massive
-            # urgency premium to make sure we actually get filled when our inventory is empty.
-            # Using 200 ticks of lookahead gives up to a +20 edge to our Fair Value.
-            urgency_lookahead = 200
+            # A lower, more sensible urgency premium. 
+            # 100 ticks of lookahead gives up to a +10 edge to our Fair Value.
+            urgency_lookahead = 100
 
             position_limit = self.LIMIT[Product.PEPPER]
             inventory_ratio = (position_limit - position) / position_limit
@@ -384,19 +383,44 @@ class Trader:
         best_ask = min(order_depth.sell_orders.keys()) if has_asks else None
         best_bid = max(order_depth.buy_orders.keys()) if has_bids else None
 
-        # Derive mid from whatever is available, falling back to last known mid
+        # Derive raw mid from whatever is available, falling back to last known raw mid
         if best_ask is not None and best_bid is not None:
-            mid = (best_ask + best_bid) / 2
+            raw_mid = (best_ask + best_bid) / 2
         elif best_ask is not None:
-            mid = best_ask - base_width  # estimate mid from ask side
+            raw_mid = best_ask - base_width  # estimate mid from ask side
         elif best_bid is not None:
-            mid = best_bid + base_width  # estimate mid from bid side
+            raw_mid = best_bid + base_width  # estimate mid from bid side
         else:
             # Fully empty book — fall back to last known mid or EMA
-            mid = traderObject.get("ash_prev_mid", traderObject.get("ash_ema", 10000))
+            raw_mid = traderObject.get("ash_prev_raw_mid", traderObject.get("ash_ema", 10000))
+        
+        traderObject["ash_prev_raw_mid"] = raw_mid
 
-        # --- EMA anchor (slower, no hard pull to 10k) ---
-        ema = traderObject.get("ash_ema", mid)
+        # --- 1. Rolling Median Smoothing ---
+        # Keep a short history of raw mids to compute the median
+        raw_mid_history = traderObject.get("ash_raw_mids", [])
+        raw_mid_history.append(raw_mid)
+        if len(raw_mid_history) > 5:
+            raw_mid_history.pop(0)
+        traderObject["ash_raw_mids"] = raw_mid_history
+
+        # Use median of the short recent history to filter out 1-tick anomalies
+        mid = float(np.median(raw_mid_history))
+
+        # --- 2. Median Bootstrapping for Initialization ---
+        tick_count = traderObject.get("ash_tick_count", 0) + 1
+        traderObject["ash_tick_count"] = tick_count
+
+        if tick_count <= 20:
+            bootstrap_mids = traderObject.get("ash_bootstrap_mids", [])
+            bootstrap_mids.append(raw_mid)
+            traderObject["ash_bootstrap_mids"] = bootstrap_mids
+            
+            # Snap EMA to median of bootstrapping window
+            ema = float(np.median(bootstrap_mids))
+        else:
+            # Post-bootstrap: use the stored EMA
+            ema = traderObject.get("ash_ema", mid)
 
         # --- returns tracking ---
         last_ret = mid - traderObject.get('ash_prev_mid', mid)
@@ -494,11 +518,12 @@ class Trader:
                 bid_width = max(1, dynamic_width * 0.5)
 
         # --- EMA update ---
-        ema_alpha = 2 / (50 + 1)
-        if abs(zscore) < 1.0:
-            ema = mid * ema_alpha + ema * (1 - ema_alpha)
-        else:
-            ema = mid * (ema_alpha * 0.2) + ema * (1 - ema_alpha * 0.2)
+        if tick_count > 20:
+            ema_alpha = 2 / (50 + 1)
+            if abs(zscore) < 1.0:
+                ema = mid * ema_alpha + ema * (1 - ema_alpha)
+            else:
+                ema = mid * (ema_alpha * 0.2) + ema * (1 - ema_alpha * 0.2)
 
         traderObject["ash_ema"] = ema
         traderObject['ash_prev_mid'] = mid
@@ -686,15 +711,15 @@ class Trader:
                 default_edge = self.params[Product.PEPPER]["default_edge"]
 
                 if buy_quantity > 0:
-                    # AGGRESSIVE MAKE: Instead of pennying the lowest bid, aggressively penny the **ASK**.
-                    # Try to quote at best_ask - 1 to be the #1 priority buyer, but cap it at our fair value.
-                    best_ask = min(order_depth.sell_orders.keys()) if len(order_depth.sell_orders) > 0 else 1000000
+                    # SMART MAKE: Penny the **BID** instead of the ASK to avoid jumping the wide spread.
+                    # We become the #1 priority buyer but save significant PnL by not crossing the spread.
+                    best_bid = max(order_depth.buy_orders.keys()) if len(order_depth.buy_orders) > 0 else 0
                     
-                    # We want to be best_ask - 1, bounded by our fair value
-                    bid_price = min(best_ask - 1, math.floor(pepper_fair_value))
+                    # We want to be best_bid + 1, but still bounded by our fair value
+                    bid_price = min(best_bid + 1, math.floor(pepper_fair_value))
                             
                     pepper_orders.append(Order(Product.PEPPER, bid_price, buy_quantity))
-                    logger.print(f"PEPPER AGGRESSIVE_MAKE BID: {buy_quantity}x @ {bid_price}")
+                    logger.print(f"PEPPER SMART_MAKE BID: {buy_quantity}x @ {bid_price}")
 
                 # (Passive Asks were removed because they caused premature offloading in an upward trending market)
                     
