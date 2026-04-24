@@ -95,14 +95,23 @@ for r, s, t, threshold, d in steps:
 
 # Simulate the curve
 # Pretend this is the distribution, find the best speed for it
-cdf = [0 for i in range(101)]
-cdf[0] = 10
-cdf[20:30] = [3] * 10
-cdf[30:40] = [6] * 10
-cdf[40:50] = [8] * 10
-cdf[50:60] = [6] * 10
-cdf[60:70] = [4] * 10
-cdf[70:76] = [1] * 6 # At very high speed it doesnt make sense anymore
+cdf = [0.0 for i in range(101)]
+
+# People putting very low (0-5)
+cdf[0] = 10.0
+for i in range(1, 6): cdf[i] = 1.0
+
+# Thin middle (6-29)
+for i in range(6, 30): cdf[i] = 0.5
+
+# The user's hypothesized massive 'hump' from 30 to 50
+for i in range(30, 51): cdf[i] = 4.0
+cdf[33] += 5.0  # 1/3 split
+cdf[40] += 5.0  # round number
+cdf[50] += 5.0  # round number
+
+# Thin long tail
+for i in range(51, 101): cdf[i] = 0.1
 
 sm = sum(cdf)
 # Normalize cdf
@@ -123,4 +132,4 @@ for t in range(101):
         best_pnl = pnl
         best_t = t
 
-print(f"Best t: {best_t}, Best pnl: {best_pnl} for this simulated distribution")
+print(f"Best t: {best_t}, {speed_r_s_optimal[best_t]}, Best pnl: {best_pnl} for this simulated distribution")
