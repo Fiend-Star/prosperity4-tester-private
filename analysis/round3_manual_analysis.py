@@ -60,7 +60,7 @@ else:
 print("Normalizing PnLs...")
 mean_pnl = np.mean(all_pnls)
 if mean_pnl != 0:
-    all_pnls = all_pnls / mean_pnl
+    pass #all_pnls = all_pnls / mean_pnl
 
 avg_bids = np.round(avg_h_bids, 3)
 
