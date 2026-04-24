@@ -217,3 +217,7 @@ __marimo__/
 #draw.io
 .$backtester.drawio.bkp
 .$backtester.drawio.dtmp
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
