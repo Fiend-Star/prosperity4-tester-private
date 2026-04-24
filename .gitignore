@@ -216,4 +216,6 @@ __marimo__/
 
 #draw.io
 .$backtester.drawio.bkp
-.$backtester.drawio.dtmp
+
+*.DS_Store
+analysis/avg_data.npz
