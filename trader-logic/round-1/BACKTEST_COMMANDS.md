@@ -43,11 +43,11 @@ python -m prosperity4bt trader-logic/round-1/r1_v4.py 1--1 --no-out
 # imc mode with adverse-rate calibration matches website within ±1.6% for ACO
 python -m prosperity4bt trader-logic/round-1/r1_v4.py 1 --ticks 10000 --match-mode imc --no-out
 
-# Default (more conservative taker matching — what we usually use)
+# Default (CSV replay + >= crossing — what we usually use for ranking)
 python -m prosperity4bt trader-logic/round-1/r1_v4.py 1 --ticks 10000 --match-mode default --no-out
 
-# Strict (no extra taker fills)
-python -m prosperity4bt trader-logic/round-1/r1_v4.py 1 --ticks 10000 --match-mode strict --no-out
+# IMC (== exact + calibrated inside-spread taker supplement; better website proxy)
+python -m prosperity4bt trader-logic/round-1/r1_v4.py 1 --ticks 10000 --match-mode imc --no-out
 ```
 
 ### 4. Compare all strategies at once
@@ -94,7 +94,7 @@ python -m prosperity4bt trader-logic/round-1/references/r1_troll.py 1 --ticks 10
 |------|--------------|---------|
 | `--ticks N` | Max ticks to simulate (1000 = tutorial, 10000 = full day) | full CSV length |
 | `--match-trades {all\|worse\|none}` | Trade matching mode | `all` |
-| `--match-mode {default\|imc\|strict\|sim\|website}` | ACO fill calibration | `default` |
+| `--match-mode {default\|imc}` | ACO fill calibration | `default` |
 | `--no-out` | Skip saving .log file | writes log |
 | `--no-progress` | Hide progress bars | shows bars |
 | `--print` | Show trader stdout (for `print()` debug) | suppressed |
@@ -104,11 +104,10 @@ python -m prosperity4bt trader-logic/round-1/references/r1_troll.py 1 --ticks 10
 
 **Default mode is conservative (CSV-replay only). IMC mode adds calibrated invisible-taker fills.**
 
-| Mode | r1_v4 total | When to use |
-|------|------------:|-------------|
-| `default` | 309,686 | Ranking strategies, bug detection |
-| `imc` | 320,526 | Absolute PnL prediction (±1.6% of website for ACO) |
-| `strict` | Lower | Paranoid conservative only |
+| Mode | When to use |
+|------|-------------|
+| `default` | Ranking strategies, bug detection (CSV replay only) |
+| `imc` | Website-calibrated absolute PnL (see BACKTESTER_GUIDE.md §7 for current rates) |
 
 **Add `--match-mode imc` for website-calibrated numbers:**
 ```bash

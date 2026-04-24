@@ -132,4 +132,8 @@ for t in range(101):
         best_pnl = pnl
         best_t = t
 
+<<<<<<< HEAD
 print(f"Best t: {best_t}, {speed_r_s_optimal[best_t]}, Best pnl: {best_pnl} for this simulated distribution")
+=======
+print(f"Best t: {best_t}, Best pnl: {best_pnl} for this simulated distribution")
+>>>>>>> origin/master

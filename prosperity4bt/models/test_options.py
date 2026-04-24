@@ -11,10 +11,7 @@ class TradeMatchingMode(str, Enum):
 
 class MatchMode(str, Enum):
     default = "default"   # Current >= crossing + market trade fallback
-    imc = "imc"           # == exact matching, taker hits best bid/ask
-    strict = "strict"     # == exact matching, no taker simulation
-    sim = "sim"           # Full agent-based sim: unified OrderBook + Poisson taker
-    website = "website"   # Detect ALL takers from orderbook tight spread, route through unified book
+    imc = "imc"           # == exact matching + calibrated taker supplement
 
 
 class ExtraFlowMode(str, Enum):

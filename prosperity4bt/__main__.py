@@ -23,7 +23,7 @@ def run(
     original_timestamps: Annotated[bool, Option("--original-timestamps", help="Preserve original timestamps in output log rather than making them increase across days.")] = False,
     ticks: Annotated[Optional[int], Option("--ticks", help="Maximum number of ticks to simulate per day.")] = None,
     iterations: Annotated[Optional[int], Option("--iterations", help="Number of times run() is called per day. Simulates test (1000) or final (10000) scoring cadence. Between calls, resting orders persist.")] = None,
-    match_mode: Annotated[MatchMode, Option("--match-mode", help="Matching mode: 'default' (>= crossing), 'imc' (== exact + taker sim), 'strict' (== exact only).")] = MatchMode.default,
+    match_mode: Annotated[MatchMode, Option("--match-mode", help="Matching mode: 'default' (>= crossing, CSV-trade fallback) or 'imc' (== exact + calibrated taker supplement, recommended for website ranking).")] = MatchMode.default,
     extra_flow: Annotated[ExtraFlowMode, Option("--extra-flow", help="Simulate R2 MAF extra 25% flow. 'none' = no change (80% testing case); 'scale' = multiply volumes by 1.25; 'interp' = inject new levels at midpoints.")] = ExtraFlowMode.none,
 ):
     if out is not None and no_out:

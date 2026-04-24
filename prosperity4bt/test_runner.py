@@ -238,8 +238,9 @@ class TestRunner:
             total_long = sum(order.quantity for order in product_orders if order.quantity > 0)
             total_short = sum(abs(order.quantity) for order in product_orders if order.quantity < 0)
 
-            if product_position + total_long > LIMITS[product] or product_position - total_short < -LIMITS[product]:
-                sandbox_log_lines.append(f"Orders for product {product} exceeded limit of {LIMITS[product]} set")
+            limit = LIMITS.get(product, 80)
+            if product_position + total_long > limit or product_position - total_short < -limit:
+                sandbox_log_lines.append(f"Orders for product {product} exceeded limit of {limit} set")
                 orders.pop(product)
 
         if len(sandbox_log_lines) > 0:
