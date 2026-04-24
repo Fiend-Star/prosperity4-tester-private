@@ -241,14 +241,14 @@ Universal limits (both modes): CSV is the market **without your orders** — any
 
 **Calibration snapshot (1k ticks, ACO product, deterministic imc):**
 
-| Dataset | Mode | ACO local | Website | Error |
-|---------|------|----------:|--------:|------:|
-| R2 round98 (day 1) | `imc` (extra_rate=0.030) | 1,465 | 1,451 | **+1.0%** |
-| R2 round98 (day 1) | `default` | — | 1,451 | — |
-| R1 day 0 (tutorial) | `imc` (extra_rate=0.030) | 2,078 | 3,091 | −32.8% |
-| R1 day 0 (tutorial) | `default` | 2,282 | 3,091 | −26.2% |
+| Dataset | Strategy | Mode | ACO local | Website | Error |
+|---------|----------|------|----------:|--------:|------:|
+| R2 round98 (274128 data) | r2_v2 (r1_v4 base) | `imc` (extra_rate=0.038) | 1,004 | 1,026 | **−2.2%** |
+| R2 round98 (274128 data) | r2_v2 | `default` | — | 1,026 | — |
+| R1 day 0 (tutorial) | r1_v4 | `imc` (extra_rate=0.038) | 2,582 | 3,091 | −16.5% |
+| R1 day 0 (tutorial) | r1_v4 | `default` | 2,282 | 3,091 | −26.2% |
 
-**Current params** (`prosperity4bt/tools/order_match_maker.py`): IPR extra_rate=0.0, ACO extra_rate=0.030 (R2-calibrated from submission 275130). R1 drifts because R1 day 0 has ~2× the inside-spread taker rate of R2 day 1 — per-round re-calibration is expected. Run `python trader-logic/round-2/calibrate_imc.py` to sweep.
+**Current params** (`prosperity4bt/tools/order_match_maker.py`): IPR extra_rate=0.0 (R2 IPR BT 7,403 vs website 7,386, +0.2%), ACO extra_rate=0.038 (R2-calibrated from round98 CSV = submission 274128's book data, 100% match). Each R2 submission gets slightly randomized book data — round98 only matches 274128; other submissions (275130: 21%, 275498: 21%, 286442: 21%) have different books. R1 drifts because R1 day 0 has a different inside-spread taker rate — per-round re-calibration is expected. Run `python trader-logic/round-2/calibrate_imc.py` to sweep.
 
 ---
 

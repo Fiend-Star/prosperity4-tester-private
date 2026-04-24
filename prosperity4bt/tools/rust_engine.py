@@ -77,17 +77,23 @@ def load_trades(round_num, day_num):
 # Matching engine — faithful port of Rust execute_strategy_orders
 # ──────────────────────────────────────────────────────────────────
 
-POSITION_LIMIT = 80
+from prosperity4bt.constants import LIMITS
+DEFAULT_POSITION_LIMIT = 80  # R0/R1 fallback for unknown products
 
 
 def enforce_limits(orders, positions):
-    """ALL-OR-NOTHING position limit check per product (from Rust source)."""
+    """ALL-OR-NOTHING position limit check per product (from Rust source).
+
+    Uses per-product LIMITS dict from constants.py (R3+ vouchers have 300,
+    delta-1 products 200). Unknown products default to 80.
+    """
     valid = {}
     for product, order_list in orders.items():
         pos = positions.get(product, 0)
         total_buy = sum(o.quantity for o in order_list if o.quantity > 0)
         total_sell = sum(abs(o.quantity) for o in order_list if o.quantity < 0)
-        if pos + total_buy > POSITION_LIMIT or pos - total_sell < -POSITION_LIMIT:
+        limit = LIMITS.get(product, DEFAULT_POSITION_LIMIT)
+        if pos + total_buy > limit or pos - total_sell < -limit:
             continue  # reject ALL orders for this product
         valid[product] = order_list
     return valid

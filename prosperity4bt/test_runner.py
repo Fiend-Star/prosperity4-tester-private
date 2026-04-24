@@ -30,6 +30,12 @@ class TestRunner:
 
 
     def run(self):
+        # Expose round/day to the trader via env vars (pattern borrowed from shh1v).
+        # Lets traders auto-configure TTE, etc. without manual per-day edits.
+        import os
+        os.environ["PROSPERITY4BT_ROUND"] = str(self.round)
+        os.environ["PROSPERITY4BT_DAY"] = str(self.day)
+
         data = self.data_reader.read_from_file(self.round, self.day)
         state = TradingState(
             traderData="",
