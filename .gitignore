@@ -221,3 +221,6 @@ __marimo__/
 # macOS Finder metadata
 .DS_Store
 **/.DS_Store
+
+*.DS_Store
+analysis/avg_data.npz
