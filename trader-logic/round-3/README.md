@@ -25,6 +25,9 @@
 - `r3_v1.py` — **PROVEN BASELINE** (+28,013 BT). Pure MM + intrinsic arb on 4000/4500, no Black-Scholes.
 - `r3_v3.py` — **v3 SUBMISSION CANDIDATE**. v1 + strict intrinsic arb on all 10 strikes + call-spread arb scanner on all 45 pairs + vol-scaled HYDROGEL_PACK MM. **Identical BT PnL to v1** (arbs don't fire on BT data — insurance for live).
 - `r3_v3_theta.py` — A/B variant with terminal theta harvest. No effect in BT (may help on website if round-end liquidation uses intrinsic/BS-theoretical).
+- `r3_v4.py` — v3 + EDA-driven attempts (OBI predictor, size scale-up). All disabled — both add no value or destroyed PnL. Final architecture identical to v3 (+28k BT).
+- `notes/voucher_analysis.py` — Exhaustive EDA script (8 parts: dynamics, IV, smile, no-arb, cross-product, taker flow, regimes, deep-ITM TV).
+- `notes/voucher_analysis_output.txt` — EDA output (~320 lines).
 - `r3_v1a..r3_v1e.py` — v1 iteration history.
 - `r3_v2.py`, `r3_v2b.py` — v2 IV surface experiments. Underperform v1 by $1.6k / $7.7k — abandoned.
 - `manual_r3_solver.py` — Nash solver with cycle detection.
@@ -69,6 +72,29 @@ Things to try for v3+:
 - [ ] Investigate HYDROGEL_PACK day 2 weakness (-116) — vol-scaled MM didn't help in BT (spread=16 is wide enough that post is always best±1 regardless of slack).
 - [ ] After website feedback: if v3 structural arbs fire often, tune ARB_SAFETY_MARGIN and sizes.
 - [ ] Submit manual challenge bids **(766, 866)** via UI.
+
+## EDA Findings (2026-04-25)
+
+Comprehensive 8-part EDA (`notes/voucher_analysis.py`):
+
+**Confirmed alpha sources** (already in v1/v3):
+- Spread-capture MM on 5000-5400 (+$4k 3-day BT)
+- Intrinsic arb on VEV_4000/4500 (+$362, 73-83 executable arbs/day)
+
+**Refuted theoretical claim**: quant-finance agent said "AR1(IV) ≈ 0.98, half-life > 200 ticks". **Data shows AR1(ΔIV) ≈ -0.5 universally with half-life 0-30 ticks** — IV mean-reverts at 1-30 tick scale, not 200+. v2's 100-tick window was 30× too slow.
+
+**Tried but failed**:
+- **OBI predictor on VEV_4000/4500** (β=0.30/-0.29, t-stat 8-11, R²~1%): real signal but spread=20 exceeds expected per-trade gain. Aggressive entry+exit lost -$394k in BT.
+- **Size scale-up on VEV_5300/5400**: no effect — fills are taker-flow-limited, our quote depth doesn't matter.
+- **VEV_5500 enabling**: spread=1 means posting at best+1 crosses the book → -$124k loss.
+- **Faster IV mean-reversion (1-3 tick window)**: signal magnitude too small vs spread costs.
+
+**Key insight**: The R3 BT data has alpha CEILING ~+28k. Markets are efficient enough that simple MM captures essentially all available edge. v1/v3/v4 all converge to the same PnL.
+
+**Significant but unexploited**:
+- All products show VR(20) = 0.4-0.8 (mean-reversion at 20-tick scale, NOT random walk)
+- Smile R² degrades day 0→2: 0.81 → 0.42 (smile fits get worse)
+- VEV_5400/5500 show -13% to -26% intraday drift (theta decay observable). Short-OTM strategy possible but high variance — not deployed.
 
 ## v3 Post-Mortem: What We Tried
 
