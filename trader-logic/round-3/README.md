@@ -6,8 +6,10 @@ Two scoring windows tracked separately:
 
 | Window | Active best | Live PnL |
 |--------|-------------|---------:|
-| **1k daily probe** (leaderboard) | `r3_v27.py` (untested live) | **~$42,300** projected ★ |
-| **10k final eval** (round close) | `r3_v27.py` (untested live) | **~$66,700** projected ★ |
+| **1k daily probe** (leaderboard) | `r3_v28.py` (untested live) | **~$154k** projected ★ |
+| **10k final eval** (round close) | `r3_v28.py` (untested live) | **~$166-170k** projected ★ |
+| Fixed v27 (sub'd) | live confirmed | $42,203 |
+| Buggy v27 (sub 428103) | live confirmed | -$67,456 |
 
 Manual bids: **(b1=766, b2=866)**.
 BT calibration: default × **0.981** = website (verified 5×). imc × **1.005** = website.
@@ -23,7 +25,9 @@ BT calibration: default × **0.981** = website (verified 5×). imc × **1.005** 
 | `r3_v23.py` | + VEV_4000 ladder MM (Layer 5 of 5 attempted; only one survived BT) | $15,460 | $40,268 / $42,389 imc | ~$42,600 proj |
 | `r3_v26.py` | + HOLD-FLIP stall fix (live 424285 swing) + multi-cycle (-$708 10k BT, +$5k live 1k expected) | $15,500 | $39,560 | ~$39,000 proj |
 | `r3_v27.py` (sub **428103**, BUGGY +50 offset) | + DP-OPTIMAL HARDCODED HP/VFE TARGETS. Lost -$67,456 LIVE due to market_trade fills at order price. | $43,118 | $67,967 | **-$67,456 ❌** |
-| **`r3_v27.py`** (offset=2 fix) | Same DP layer with cross-offset bug fixed (best±2 instead of ±50). HP $30,676, VFE $11,321 day-2 1k. | **$42,242** | **$67,090** | **~$40-50k proj** ★ |
+| `r3_v27.py` (offset=2 fix, sub TBD) | Same DP with cross-offset bug fixed. HP/VFE only. | $42,242 | $67,090 | **$42,203 ✓** (BT × 0.999) |
+| `r3_troll.py` | Full per-tick walk-DP for all 12 products. DP runs through full 10k → "handover loss" -$1.9k post-tick-1000. | $155,608 | $153,672 | ~$152-156k proj |
+| **`r3_v28.py`** ★ | r3_troll DP for ticks 0-999 + V22Trader takeover for ticks 1000+. V22 state buffers stay warm during DP via always-run pattern. | **$155,608** | **$168,403** | **~$166-170k proj ★** |
 
 Earlier versions and sweep variants are in `archive/`.
 
