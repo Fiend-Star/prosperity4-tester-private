@@ -236,3 +236,5 @@ trader-logic/round-3/data/
 
 # Submission run-log extractions (zip stays, extracted dir is regenerable)
 run-logs/round-*/[0-9]*/
+
+.worktrees/
