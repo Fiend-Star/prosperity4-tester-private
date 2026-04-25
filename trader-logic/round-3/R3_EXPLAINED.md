@@ -85,34 +85,8 @@ Each round is self-contained. No exercise — at round end, IMC marks voucher po
 
 ---
 
-## Current State (2026-04-25)
+## Current State (FINAL)
 
-| Submission | Score | Rank |
-|---|---:|---:|
-| 383883 (r3_v3) | $1,177 | #615 / 1506 (59 percentile) |
-| 384367 (god logger) | $0 (logger) | — |
-| **r3_v7** (Wall Mid for VFE, ready to submit) | $2,538 1k-tick / $47,388 10k 3-day | est. top 25-30% |
+See `README.md` for active state and `memory/project_round3_v1.md` for full strategy history.
 
-**Top trader**: $154,335 (130× ours) — alpha source unknown.
-
----
-
-## Strategy History
-
-### Worked
-- v7's **Wall Mid for VFE** (P3-winner technique): +$1.5k 1k-tick, +$19k 10k 3-day vs v3
-- v3's intrinsic arb on VEV_4000/4500: +$362 (rare but real)
-- Voucher MM at best±1 on strikes 5000-5400: +$4k
-
-### Failed
-- **v2** IV smile (quadratic + z-score): -$7.7k. Wrong timescale.
-- **v5** directional via VEV_4000: -$40k/day. Spread > signal.
-- **v6** aggressive take: -$80k 3-day. Adverse selection.
-- **v8** fixed-sigma BS voucher MM: day 0 +$7k, days 1-2 disasters. Vol regime fragility.
-- Competitor 392245: same vol fragility.
-
-### Unsolved
-Top trader $80k+ alpha source unknown. Candidates:
-1. Volatility regime detection (BS voucher trading on/off conditionally)
-2. Quote prediction (anticipating MM bot's next quote)
-3. Order flow signal from market_trades patterns
+**TL;DR**: Submitted r3_v11 → website **$12,246** (sub 402350). Manual: (b1=766, b2=866).
