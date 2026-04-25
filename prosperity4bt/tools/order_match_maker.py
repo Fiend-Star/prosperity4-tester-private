@@ -31,16 +31,16 @@ TAKER_PARAMS = {
                            "width_alpha": 0.0},     # R2-calibrated against round98 (submission 274128 data, 100% book match). ACO BT 1,004 vs website 1,026 (-2.2% err), total BT 8,407 vs website 8,412 (-0.1% err). width_alpha=0 = legacy behavior; uncalibrated for R4.
     "HYDROGEL_PACK":      {"qty_range": (2, 6),
                             "extra_rate": 0.0070,
-                            "width_alpha": 0.0},    # R3 calibrated against v19 sub 406831 day-2 1k: imc HP $13,526 vs actual $13,543 (0.13% err). qty_range = (2, 6) = day-2 1k trades CSV min/max.
+                            "width_alpha": 0.0},    # R3 calibrated against v19 sub 406831 day-2 1k: imc HP $13,526 vs actual $13,543 (0.13% err). qty_range = (2, 6) = day-2 1k trades CSV min/max. Phase 3.5 attempted bump to 0.0085 / cut to 0.0075 — both shifted v17 HP only modestly while not enough to offset v17 multi-level VFE overshoot. Reverted to original.
     "VELVETFRUIT_EXTRACT": {"qty_range": (3, 8),
                             "extra_rate": 0.060,
-                            "width_alpha": 0.0},    # R3 calibrated: gives $1,565 vs target $1,564 (DEAD-ON, 0.06% err).
+                            "width_alpha": 0.0},    # R3 calibrated: gives $1,565 vs target $1,564 on v19 (DEAD-ON, 0.06% err). Phase 3.5 attempted cuts to 0.045 / 0.057 — neither fit both v17 (multi-level) and v19 (single-level) since Phase 3 contributes a fixed $936 to v17 VFE that no rate can reduce. Reverted to original; v17 retains +3.46% structural overshoot.
     "VEV_4000":            {"qty_range": (1, 3),
                             "extra_rate": 0.004,
-                            "width_alpha": 0.0},    # R3 calibrated iter 4: 0.0035 gave $113 (target $134). Bumping slightly.
+                            "width_alpha": 0.0},    # R3 calibrated. Phase 3.5 attempted bump 0.0055 / 0.0048 — quantization at low rates means changes <0.001 don't fire reliably. Reverted.
     "VEV_4500":            {"qty_range": (1, 3),
                             "extra_rate": 0.009,
-                            "width_alpha": 0.0},    # R3 calibrated iter 4: 0.011 gave $125 (target $99). Lowering slightly.
+                            "width_alpha": 0.0},    # R3 calibrated. Phase 3.5 attempted 0.011 / 0.0095 — same quantization issue. Reverted.
     "VEV_5000":            {"qty_range": (1, 3),
                             "extra_rate": 0.0,
                             "width_alpha": 0.0},    # R3 disabled: supplement adverse-selects on this product (gave -$16 vs target +$25). Day-2 1k has 0 takers in CSV; live website gain comes from a mechanism not modeled by inside-spread supplement. Leave unsupplemented.
