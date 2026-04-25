@@ -1,26 +1,45 @@
-"""r3_v22.py — HP S17-GIGA-SHORT + S7-bottom cover + flip-long-200 + hold-to-FLIP_EXIT_MID.
+"""r3_v26.py — v25 + HOLD-FLIP STALL TIMEOUT (live 424285 swing fix).
 
-HP: spread==17 & mid>10010 -> short to -200; cover when spread==7 & mid <= 8th-pctl
-of last 500-tick window; flip long to +200; HOLD inventory (no passive ask) until
-mid >= FLIP_EXIT_MID (10020) or FLIP_TIMEOUT_TICKS (1500) — captures up-leg of
-reversion. Passive MM fallback uses online cov(edge,ret)/var(edge) skew.
+Live sub 424285 (v23) day-2 1k probe: HP peaked at +$20,650 at ts 69,700 then
+gave back $7,429 by tick close ($13,221). FLIP_EXIT_MID=10020 was never reached
+(live peak post-FLIP was 9,997). Strategy held +200 long for 42,700 ticks
+watching unrealized profit drain from 9,997 down to 9,959.
 
-VFE: Wall Mid (highest-volume bid/ask midpoint) + Layer-E aggressive lift on
-spread==2 (ask drop) / spread==3 (bid rise) inside-spread events.
+In BT 10k day-2 (v23 trajectory) HOLD lasts only 671 ticks before mid hits 10,020
+and FLIP EXIT [mid_target] fires. The live 1k window simply ends before mid
+recovers — the BT trajectory does not reproduce the bug.
 
-Vouchers: BS taking (sigma=adaptive median IV across active strikes), intrinsic
-arb on deep-ITM, call-spread arb scanner across all strike pairs, passive MM on
-ATM strikes, deep-ITM theta carry MM (VEV_4000/4500), passive OTM bids on
-VEV_5300/5400/5500. Skip VEV_6000/6500 (one-sided sells, expire 0).
+v26 fix: add a stall-aware third exit between mid_target and the 1500-tick safety
+        exit IF mid >= FLIP_EXIT_MID                                # v22
+             OR (held_for >= FLIP_STALL_TIMEOUT AND
+                 flip_peak_mid < FLIP_STALL_PEAK_MIN)                # v26 NEW
+             OR held_for >= FLIP_TIMEOUT_TICKS                       # v22
+
+With FLIP_STALL_TIMEOUT=800 and FLIP_STALL_PEAK_MIN=10005:
+  BT 10k:  HOLD ends at 671 ticks via mid_target -> stall NEVER engages.
+  Live 1k: peak stuck below 10,005 -> stall fires at held=800 (~ts 65,100),
+           exit at mid ~9,990, captures ~$19,000 vs current $13,200 (~+$5,800).
+
+Cycle-2+ paths in v25 (cover-to-flat) are untouched: flip_holding only sets on
+cycle 1, so stall only governs that one HOLD window.
+
+Inherited v25 docstring:
+=======================================================================
+v24 + MULTI-CYCLE HP (re-enter S17 after each cycle completes).
+1. MULTI-CYCLE: re-enter S17 after FLIP EXIT.
+2. Cycle 2+: cover to flat (skip FLIP-to-+200).
+3. FLIP only on cycle 1.
+v24 baseline: $40,708 day-2 10k / $105,021 3-day / $15,446 day-2 1k.
 """
 
 import itertools
 import json
 import math
+from collections import deque
 from statistics import NormalDist, median
 from typing import Any, Dict, List, Optional, Tuple
 
-from datamodel import Order, ProsperityEncoder, Symbol, TradingState
+from datamodel import Observation, Order, ProsperityEncoder, Symbol, Trade, TradingState
 
 _ND_VOUCHER = NormalDist()
 
@@ -106,6 +125,42 @@ class HydrogelParams:
     FLIP_TARGET = 200
     FLIP_EXIT_MID = 10020      # v22: hold long inventory until mid recovers to this
     FLIP_TIMEOUT_TICKS = 1500  # v22: safety bail if reversion stalls
+    # v26: trailing-stop on HOLD-FLIP. Live 424285 peak post-FLIP was 9,997 vs
+    # mid_target 10,020 -> never tripped, gave back $7,429. Two thresholds keep
+    # this from regressing v23/v24/v25 BT 10k (where mid_target fires at 671 ticks
+    # via a fast climb 9,935 -> 10,020):
+    #   FLIP_TRAIL_ENABLE_PEAK = require peak to first reach this absolute level
+    #   FLIP_TRAIL_DELTA       = then exit when peak - mid >= delta
+    # 9990/15 means: arm only if peak >= 9,990 (40+ above typical FLIP entry 9,950),
+    # exit only on a 15-pt drop from peak. In BT 10k the climb is monotonic-ish
+    # past 9,990 to 10,020 within ~50 ticks, leaving little room for a 15-pt
+    # retrace before mid_target fires. In live 1k peak stalled at 9,997 then
+    # dropped 20+; trail would exit ~ts 71k at mid ~9,982 capturing ~$17k.
+    FLIP_TRAIL_ENABLE_PEAK = 10000
+    FLIP_TRAIL_DELTA       = 15
+
+    # ===================== Layer 1 (v23): S15 GIGA LONG mirror ===============
+    # sp==15 ∧ mid<ENTRY_MID_MAX fires 775 events / 3-day (2× sp=17 frequency).
+    # Mid-only sweep (30_passive.md §3): mid<9990 → $46.4k / 3-day; mid<9985 → $64.8k;
+    # mid<9980 → $68.1k. Tighter entry filters out shallow dips that stall.
+    # First-pass mid<9990 caused -$8,928 / 3-day in BT (day 1 regressed $8,388 from
+    # repeated entries near top of dip range followed by deeper drift). Trying
+    # mid<9985 to require deeper signal.
+    REGIME_S15_SPREAD = 15
+    ENTRY_MID_MAX = 9985        # tightened from 9990 after v23 Layer 1 first-pass regression
+    S15_EXIT_MID = 10000        # neutral exit per ALPHA_HUNT §1 LOOSE optimum
+    S15_TIMEOUT_TICKS = 1500    # safety bail if mid never recovers to 10000
+    S15_TARGET = 200            # build to +pos_lim like S17 SHORT mirror
+
+    # ===================== Layer 3 (v23): S7 LONG with k=3 hold ==============
+    # spread==7 ∧ no other HP state → small long entry, exit after 3 ticks.
+    # Per-day Sharpe +0.31/+0.35/+0.56 across days (growing); 92 events / 3-day.
+    # Skip sp=8 (passive un-capturable, 4 of 490 events fill) and sp=9 (NET LOSER:
+    # spread cost 4.5 > predicted move 3.86).
+    S7_LONG_SPREAD = 7
+    S7_LONG_HOLD_TICKS = 3
+    S7_LONG_SIZE = 30
+    S7_LONG_MAX_BASE_POS = 50   # don't fire if existing |pos| larger
 
     # ==================== INTRINSIC / structure ========================
     POS_LIMIT = 200
@@ -160,6 +215,8 @@ def compute_book_features(order_depth):
     ask_px = [px(sorted_asks, i) for i in range(3)]
     bid_sz = [sz(buys,  p) for p in bid_px]
     ask_sz = [sz(sells, p) for p in ask_px]
+    denom_L1     = bid_sz[0] + ask_sz[0]
+    imbalance_L1 = (bid_sz[0] - ask_sz[0]) / denom_L1 if denom_L1 > 0 else 0.0
     bid_num = sum((bid_px[i] or 0) * bid_sz[i] for i in range(3) if bid_px[i])
     ask_num = sum((ask_px[i] or 0) * ask_sz[i] for i in range(3) if ask_px[i])
     bid_den = sum(bid_sz[i] for i in range(3) if bid_px[i])
@@ -170,22 +227,42 @@ def compute_book_features(order_depth):
     return {
         "best_bid": best_bid, "best_ask": best_ask,
         "spread": spread, "mid": mid,
+        "imbalance_L1": imbalance_L1,
         "book_wap_edge_L3": book_wap_edge_L3,
     }
 
 
 class HydrogelState:
+    # v20: SD's HydrogelState (online edge-beta calibration)
     def __init__(self):
         self.mid_buf_500: List[float] = []
         self.mid_buf_100: List[float] = []
         self.row: int = 0
+        # Legacy fields kept for backward-compatible traderData decoding only.
+        self.regime1_entry_row: Optional[int] = None
+        self.regime1_qty: int = 0
+        self.lean_target: float = 0.0
+        self.lean_entry_mid: Optional[float] = None
+        self.lean_entry_side: int = 0
+        # S17 short tracking.
         self.s17_entry_row: Optional[int] = None
         self.s17_entry_mid: Optional[float] = None
+        # S7 cover+flip phase flag.
         self.s7_covering: bool = False
-        # post-FLIP hold phase — suppress passive quoting until mid >= FLIP_EXIT_MID
+        # v22: post-FLIP hold phase — suppress passive quoting until mid >= FLIP_EXIT_MID
         self.flip_holding: bool = False
         self.flip_entry_row: Optional[int] = None
-        # Online wap-edge calibration state for MM Layer-A skew.
+        # v26: track running peak mid since FLIP completed (for stall-aware exit).
+        self.flip_peak_mid: Optional[float] = None
+        # v23 Layer 1: S15 GIGA LONG mirror tracking (currently disabled — see run_hydrogel)
+        self.s15_entry_row: Optional[int] = None
+        self.s15_entry_mid: Optional[float] = None
+        # v23 Layer 3: S7 LONG with k=3 hold tracking
+        self.s7_long_entry_row: Optional[int] = None
+        self.s7_long_qty: int = 0
+        # v25: multi-cycle tracking
+        self.cycle_count: int = 0
+        # Online wap-edge calibration state.
         self.prev_mid: Optional[float] = None
         self.prev_wap_edge: Optional[float] = None
         self.edge_buf: List[float] = []
@@ -196,11 +273,22 @@ class HydrogelState:
             "buf500":    self.mid_buf_500,
             "buf100":    self.mid_buf_100,
             "row":       self.row,
+            "r1_row":    self.regime1_entry_row,
+            "r1_qty":    self.regime1_qty,
+            "lean":      self.lean_target,
+            "lean_mid":  self.lean_entry_mid,
+            "lean_side": self.lean_entry_side,
             "s17_row":   self.s17_entry_row,
             "s17_mid":   self.s17_entry_mid,
             "s7_cov":    self.s7_covering,
             "fh":        self.flip_holding,
             "fer":       self.flip_entry_row,
+            "fpm":       self.flip_peak_mid,
+            "s15_row":   self.s15_entry_row,
+            "s15_mid":   self.s15_entry_mid,
+            "s7l_row":   self.s7_long_entry_row,
+            "s7l_qty":   self.s7_long_qty,
+            "cyc":       self.cycle_count,
             "pmid":      self.prev_mid,
             "pedge":     self.prev_wap_edge,
             "edgeb":     self.edge_buf,
@@ -213,21 +301,50 @@ class HydrogelState:
         s.mid_buf_500       = d.get("buf500", [])
         s.mid_buf_100       = d.get("buf100", [])
         s.row               = d.get("row", 0)
+        s.regime1_entry_row = d.get("r1_row")
+        s.regime1_qty       = d.get("r1_qty", 0)
+        s.lean_target       = d.get("lean", 0.0)
+        s.lean_entry_mid    = d.get("lean_mid")
+        s.lean_entry_side   = d.get("lean_side", 0)
         s.s17_entry_row     = d.get("s17_row")
         s.s17_entry_mid     = d.get("s17_mid")
         s.s7_covering       = d.get("s7_cov", False)
         s.flip_holding      = d.get("fh", False)
         s.flip_entry_row    = d.get("fer")
+        s.flip_peak_mid     = d.get("fpm")
+        s.s15_entry_row     = d.get("s15_row")
+        s.s15_entry_mid     = d.get("s15_mid")
+        s.s7_long_entry_row = d.get("s7l_row")
+        s.s7_long_qty       = d.get("s7l_qty", 0)
+        s.cycle_count       = d.get("cyc", 0)
         s.prev_mid          = d.get("pmid")
         s.prev_wap_edge     = d.get("pedge")
         s.edge_buf          = d.get("edgeb", [])
         s.ret_buf           = d.get("retb", [])
         return s
 
+    @staticmethod
+    def load(trader_data):
+        if not trader_data: return HydrogelState()
+        try:
+            raw = json.loads(trader_data)
+            return HydrogelState.from_dict(raw.get("hg", {}))
+        except Exception:
+            return HydrogelState()
+
+    def save(self, trader_data):
+        try:
+            raw = json.loads(trader_data) if trader_data else {}
+        except Exception:
+            raw = {}
+        raw["hg"] = self.to_dict()
+        return json.dumps(raw)
+
 
 def run_hydrogel(state, hstate):
-    # S17 entry/build → S7-bottom percentile cover → flip long to FLIP_TARGET → hold to FLIP_EXIT_MID.
-    # Passive MM fallback uses online edge-beta calibration: beta = cov(edge, ret) / var(edge).
+    # v20: HP block from teammate Superduperbread's r3-hydro-final.py.
+    # Strategy: S17 entry/build → S7-bottom percentile cover → flip long to FLIP_TARGET=200.
+    # Passive MM fallback uses online edge-beta calibration (cov(edge,ret)/var(edge)).
     P      = Product.HYDROGEL_PACK
     orders = []
     p      = HydrogelParams
@@ -260,23 +377,50 @@ def run_hydrogel(state, hstate):
     hstate.prev_mid = mid
     hstate.prev_wap_edge = wap_edge
 
+    # v23 Layer 1 state handler also disabled — entry trigger above is gated off,
+    # so s15_entry_row stays None and this block never activates. Kept inactive
+    # rather than deleted so we can re-enable with safer params (smaller size,
+    # tighter exit, stop-loss) by uncommenting the entry trigger below.
+
     # Layer 0A: S17 short with S7-bottom-percentile reversal trigger.
     if hstate.s17_entry_row is not None and position < 0:
-        window_ready = len(hstate.mid_buf_500) >= p.S7_WINDOW
-        if window_ready:
-            sorted_window = sorted(hstate.mid_buf_500[-p.S7_WINDOW:])
-            bottom_thresh = sorted_window[int(len(sorted_window) * p.S7_BOTTOM_Q)]
-            s7_bottom     = (spread == 7 and mid <= bottom_thresh)
+        # v25: different exit conditions for cycle 1 vs later cycles
+        held_ticks = hstate.row - hstate.s17_entry_row
+        if hstate.cycle_count == 0:
+            # Cycle 1: original S7 bottom percentile cover (proven on first big drop)
+            window_ready = len(hstate.mid_buf_500) >= p.S7_WINDOW
+            if window_ready:
+                sorted_window = sorted(hstate.mid_buf_500[-p.S7_WINDOW:])
+                bottom_thresh = sorted_window[int(len(sorted_window) * p.S7_BOTTOM_Q)]
+                s7_bottom     = (spread == 7 and mid <= bottom_thresh)
+            else:
+                bottom_thresh = None
+                s7_bottom     = False
+            should_cover = s7_bottom
+            cover_reason = f"S7_Q{p.S7_BOTTOM_Q:.2f} bot={bottom_thresh}"
         else:
-            bottom_thresh = None
-            s7_bottom     = False
-        if s7_bottom:
+            # v25: Later cycles — cover when mid drops sufficiently from entry
+            # OR when mid reverts to mean (9990), OR on timeout
+            entry_mid = hstate.s17_entry_mid or mid
+            drop_from_entry = entry_mid - mid
+            should_cover = (
+                drop_from_entry >= 20  # captured 20+ point drop
+                or mid <= 9990  # reached fair value
+                or held_ticks >= 500  # timeout (same as v18 TIMEOUT)
+            )
+            cover_reason = (
+                f"drop={drop_from_entry:.1f}" if drop_from_entry >= 20
+                else f"mid<=9990" if mid <= 9990
+                else f"timeout={held_ticks}"
+            )
+
+        if should_cover:
             hstate.s7_covering   = True
             hstate.s17_entry_row = None
             hstate.s17_entry_mid = None
             logger.print(
-                f"S17 COVER START [S7_Q{p.S7_BOTTOM_Q:.2f}]: "
-                f"mid={mid:.1f} bot={bottom_thresh:.1f} pos={position}"
+                f"S17 COVER START [{cover_reason}]: "
+                f"mid={mid:.1f} pos={position} cycle={hstate.cycle_count}"
             )
 
         # Keep building short toward limit while in S17 phase.
@@ -286,33 +430,68 @@ def run_hydrogel(state, hstate):
             logger.print(f"S17 BUILD: qty={headroom} px={best_bid} mid={mid:.1f} pos={position}")
         return orders, hstate
 
-    # Cover+flip phase: keep lifting ask until target long inventory reached.
+    # Cover+flip phase: keep lifting ask until target inventory reached.
     if hstate.s7_covering:
-        remaining = p.FLIP_TARGET - position
-        if remaining > 0:
-            orders.append(Order(P, best_ask, remaining))
-            logger.print(f"S7 FLIP BUILD: buy={remaining} px={best_ask} mid={mid:.1f} pos={position}")
-        if position >= p.FLIP_TARGET:
-            hstate.s7_covering = False
-            hstate.flip_holding = True               # v22: enter hold phase
-            hstate.flip_entry_row = hstate.row
-            logger.print(f"S7 FLIP COMPLETE -> HOLD: pos={position}")
+        if hstate.cycle_count == 0:
+            # Cycle 1: FLIP to +200 (proven $1k alpha from v22)
+            remaining = p.FLIP_TARGET - position
+            if remaining > 0:
+                orders.append(Order(P, best_ask, remaining))
+                logger.print(f"S7 FLIP BUILD: buy={remaining} px={best_ask} mid={mid:.1f} pos={position}")
+            if position >= p.FLIP_TARGET:
+                hstate.s7_covering = False
+                hstate.flip_holding = True               # v22: enter hold phase
+                hstate.flip_entry_row = hstate.row
+                hstate.flip_peak_mid = mid               # v26: seed stall tracker
+                logger.print(f"S7 FLIP COMPLETE -> HOLD: pos={position} mid={mid:.1f}")
+        else:
+            # v25: Later cycles — cover to flat only (skip expensive FLIP)
+            if position < 0:
+                cover_qty = -position
+                orders.append(Order(P, best_ask, cover_qty))
+                logger.print(f"S7 COVER FLAT: buy={cover_qty} px={best_ask} mid={mid:.1f} pos={position} cycle={hstate.cycle_count}")
+            if position >= 0:
+                hstate.s7_covering = False
+                hstate.cycle_count += 1
+                logger.print(f"S7 COVER COMPLETE -> READY: pos={position} cycle={hstate.cycle_count}")
         return orders, hstate
 
-    # v22: HOLD-FLIP phase — suppress passive quoting until mid recovers to FLIP_EXIT_MID.
-    # Captures the up-leg of S17 reversion. Bail at FLIP_TIMEOUT_TICKS if mid never recovers.
+    # v22+v26: HOLD-FLIP phase — exit on three-way OR:
+    #   (a) mid >= FLIP_EXIT_MID (original up-leg target)
+    #   (b) v26 trail: peak_mid >= TRAIL_ENABLE_PEAK AND (peak_mid - mid) >= TRAIL_DELTA
+    #   (c) FLIP_TIMEOUT_TICKS safety bail
     if hstate.flip_holding:
         held_for = hstate.row - (hstate.flip_entry_row or hstate.row)
-        if mid >= p.FLIP_EXIT_MID or held_for >= p.FLIP_TIMEOUT_TICKS:
+        hstate.flip_peak_mid = max(hstate.flip_peak_mid if hstate.flip_peak_mid is not None else mid, mid)
+        trail_armed = hstate.flip_peak_mid >= p.FLIP_TRAIL_ENABLE_PEAK
+        trail_drop  = hstate.flip_peak_mid - mid
+        trail_exit  = trail_armed and trail_drop >= p.FLIP_TRAIL_DELTA
+        if mid >= p.FLIP_EXIT_MID or trail_exit or held_for >= p.FLIP_TIMEOUT_TICKS:
             if position > 0:
                 orders.append(Order(P, best_bid, -position))   # aggressive flat
+                if mid >= p.FLIP_EXIT_MID:
+                    reason = "mid_target"
+                elif trail_exit:
+                    reason = f"trail(peak={hstate.flip_peak_mid:.1f},drop={trail_drop:.1f})"
+                else:
+                    reason = "timeout"
                 logger.print(
-                    f"FLIP EXIT: sell {position} px={best_bid} mid={mid:.1f} "
-                    f"held={held_for} reason={'mid_target' if mid >= p.FLIP_EXIT_MID else 'timeout'}"
+                    f"FLIP EXIT [{reason}]: sell {position} px={best_bid} "
+                    f"mid={mid:.1f} held={held_for}"
                 )
             hstate.flip_holding = False
             hstate.flip_entry_row = None
+            hstate.flip_peak_mid = None
+            hstate.cycle_count += 1  # v25: increment cycle, ready for next S17
+            logger.print(f"CYCLE {hstate.cycle_count} COMPLETE -> READY for re-entry")
         return orders, hstate
+
+    # v23 Layer 1 REJECTED — sp=15 GIGA LONG entry caused -$8.5k 3-day regression in
+    # initial BT. Day 2 10k delta = $0 because FLIP_HOLDING (1500-tick post-S17 cycle)
+    # dominates the window and blocks S15 entry. Day 1 lost -$8k from S15 entries
+    # firing in down-trends followed by 1500-tick timeout exits at adverse prices.
+    # State machine fields (s15_entry_row, s15_entry_mid) and params kept for
+    # potential future re-enable with different size/timeout/stop-loss tuning.
 
     # Entry: spread=17 AND elevated price AND not already in S17 short
     if (spread == p.REGIME2_SPREAD
@@ -326,6 +505,12 @@ def run_hydrogel(state, hstate):
             hstate.s17_entry_mid = mid
             logger.print(f"S17 ENTER short: qty={qty} px={best_bid} mid={mid:.1f}")
         return orders, hstate
+
+    # v23 Layer 3 REJECTED — sp=7 LONG with k=3 hold caused day-2 10k -$61 (within
+    # noise) and 3-day -$4,230 (day 1 -$4,044). Pattern matches Layer 1 (sp=15):
+    # new HP signals firing OUTSIDE v22's existing S17/S7-bottom/FLIP/HOLD cycle
+    # have insufficient edge to overcome execution friction. State fields kept
+    # dormant. Skip sp=8/9 confirmed (analysis says NET LOSER / un-capturable).
 
     # Passive MM fallback with dynamic Layer-A skew (online edge beta).
     if len(hstate.edge_buf) >= p.EDGE_BETA_MIN_SAMPLES:
@@ -365,7 +550,9 @@ def run_hydrogel(state, hstate):
     return orders, hstate
 
 
-# ── Voucher / VFE strategy ────────────────────────────────────────────────────
+# Original Trader replaced below with combined v11 version. Voucher logic appended.
+
+# ── v9 Voucher / VFE strategy (ported) ────────────────────────────────────────
 
 VEVE_SYM = "VELVETFRUIT_EXTRACT"
 VOUCHER_STRIKES_ALL = [4000, 4500, 5000, 5100, 5200, 5300, 5400, 5500, 6000, 6500]
@@ -434,6 +621,10 @@ class VoucherState:
         # v12 Layer E: VFE spread-state lift — track prev L1 bid/ask
         self.prev_ve_ap1: Optional[float] = None
         self.prev_ve_bp1: Optional[float] = None
+        # v23 Layer 2: VFE wall_mid take, k=1 hold (signed qty of last entry)
+        self.vfe_take_qty: int = 0
+        # v23 Layer 4: voucher fade entries per strike (k=1 hold)
+        self.fade_entry: Dict[str, int] = {}
 
     def to_dict(self):
         return {
@@ -442,6 +633,8 @@ class VoucherState:
             "sa": self.spot_age,
             "p_ap": self.prev_ve_ap1,
             "p_bp": self.prev_ve_bp1,
+            "wmtq": self.vfe_take_qty,
+            "fade": self.fade_entry,
         }
 
     @staticmethod
@@ -454,6 +647,8 @@ class VoucherState:
         s.spot_age = d.get("sa", 0)
         s.prev_ve_ap1 = d.get("p_ap")
         s.prev_ve_bp1 = d.get("p_bp")
+        s.vfe_take_qty = d.get("wmtq", 0)
+        s.fade_entry = dict(d.get("fade", {}))
         return s
 
 
@@ -473,6 +668,19 @@ def run_vouchers(state, vstate):
     timestamp = state.timestamp
 
     od_ve = state.order_depths.get(VEVE_SYM)
+
+    # v23 Layer 2 REJECTED — VFE wall_mid CROSS-SPREAD take catastrophic:
+    # day-2 1k -$4,062, day-2 10k -$10,423, 3-day -$30,780. Mid-only $132k
+    # estimate from 27_vfe_directional.md §1 was unreliable because mid-only
+    # ignores the spread-crossing cost. VFE typical spread = 5; round-trip cost
+    # per share = 5 vs predicted move ~0.42 (FINAL_SYNTHESIS §4). Spread cost
+    # dominates by 12×. Setting layer2_buy/sell = 0 keeps downstream budget math
+    # unchanged. State field vfe_take_qty kept but always reset to 0.
+    vfe_layer2_orders: List[Order] = []
+    layer2_buy = 0
+    layer2_sell = 0
+    vstate.vfe_take_qty = 0   # never set; always reset for backward-compat
+
     # v12 Layer E: VFE spread-state aggressive lift
     # spread==2 AND ap1<prev_ap1 → BUY 20 at ap1-1
     # spread==3 AND bp1>prev_bp1 → SELL 20 at bp1+1
@@ -488,7 +696,7 @@ def run_vouchers(state, vstate):
         if (vstate.prev_ve_ap1 is not None and vstate.prev_ve_bp1 is not None):
             # Buy signal: spread==2 AND ask dropped
             if spread_ve == 2 and ba_ve < vstate.prev_ve_ap1:
-                room_buy = E_POS_CAP - pos_ve
+                room_buy = E_POS_CAP - pos_ve - layer2_buy
                 q = min(E_SIZE, room_buy)
                 if q > 0:
                     px = int(ba_ve - 1)
@@ -497,7 +705,7 @@ def run_vouchers(state, vstate):
                         layer_e_buy = q
             # Sell signal: spread==3 AND bid raised
             elif spread_ve == 3 and bb_ve > vstate.prev_ve_bp1:
-                room_sell = E_POS_CAP + pos_ve
+                room_sell = E_POS_CAP + pos_ve - layer2_sell
                 q = min(E_SIZE, room_sell)
                 if q > 0:
                     px = int(bb_ve + 1)
@@ -514,13 +722,13 @@ def run_vouchers(state, vstate):
             bb = max(od_ve.buy_orders); ba = min(od_ve.sell_orders)
             pos = state.position.get(VEVE_SYM, 0)
             fv = round(wm)
-            # Account for Layer E commitments in headroom
-            tb = 200 - pos - layer_e_buy
-            ts = 200 + pos - layer_e_sell
+            # Account for Layer 2 (wm take) + Layer E commitments in headroom
+            tb = 200 - pos - layer2_buy - layer_e_buy
+            ts = 200 + pos - layer2_sell - layer_e_sell
             half = 100
             mbp = fv - 1 if pos > half else fv
             msp = fv + 1 if pos < -half else fv
-            ve_orders = list(ve_layer_e)  # start with Layer E orders
+            ve_orders = list(vfe_layer2_orders) + list(ve_layer_e)  # L2 + Layer E first
             for p, v in sorted(od_ve.sell_orders.items()):
                 if tb > 0 and p <= mbp:
                     q = min(tb, -v); ve_orders.append(Order(VEVE_SYM, p, q)); tb -= q
@@ -532,8 +740,8 @@ def run_vouchers(state, vstate):
             if ts > 0:
                 ve_orders.append(Order(VEVE_SYM, max(fv + V_POST_SLACK_VE, ba - 1), -ts))
             orders[VEVE_SYM] = ve_orders
-        elif ve_layer_e:
-            orders[VEVE_SYM] = list(ve_layer_e)
+        elif ve_layer_e or vfe_layer2_orders:
+            orders[VEVE_SYM] = list(vfe_layer2_orders) + list(ve_layer_e)
 
     spot = v_plain_mid(state.order_depths.get(VEVE_SYM))
     if spot is None:
@@ -668,10 +876,17 @@ def run_vouchers(state, vstate):
     # Replaces v12 Layer B (VEV_4000 only). Adds VEV_4500 coverage.
     # v17 live website: VEV_4000 +$134, VEV_4500 +$99 (BT shows 0 on 4500 but
     # website fills due to bot quote dynamics not modeled in BT).
+    # v23 Layer 5: VEV_4000 uses LADDER at intrinsic ± [10.5, 10, 9, 8] (8/level
+    # = 32 per side, similar capacity to single-level 30). Per 31_vev4000_opt.md
+    # ladder beats single-level by $876 / 3-day mid-only. VEV_4500 stays single-
+    # level (no analysis support for ladder there). CLAUDE.md warns multi-level
+    # posting hurts in BT (-$670 on HP/VFE); will revert if VEV_4000 BT regresses.
     DEEP_ITM_MM_SIZE    = 30
     DEEP_ITM_POS_CAP    = 100
     DEEP_ITM_BID_OFFSET = 1
     DEEP_ITM_ASK_OFFSET = 1
+    V4000_LADDER_OFFSETS = [10.5, 10.0, 9.0, 8.0]
+    V4000_LADDER_SIZE = 8
     for K in VOUCHER_STRIKES_DEEP_ITM:
         sym = VOUCHER_SYM[K]
         od_v = state.order_depths.get(sym)
@@ -684,30 +899,55 @@ def run_vouchers(state, vstate):
         existing_buy = sum(o.quantity for o in existing if o.quantity > 0)
         existing_sell = sum(-o.quantity for o in existing if o.quantity < 0)
 
-        room_buy = DEEP_ITM_POS_CAP - pos_v - existing_buy
-        if room_buy > 0:
-            target_bid = int(round(intrinsic - DEEP_ITM_BID_OFFSET))
-            bid_px = min(target_bid, vbb + 1)
-            bid_px = max(1, bid_px)
-            if bid_px <= vba - 1:
-                qty = min(DEEP_ITM_MM_SIZE, room_buy)
-                orders.setdefault(sym, []).append(Order(sym, bid_px, qty))
+        if K == 4000:
+            # v23 Layer 5: ladder at intrinsic ± offsets, integer price rounding,
+            # de-dup if two offsets round to same price.
+            room_buy = DEEP_ITM_POS_CAP - pos_v - existing_buy
+            room_sell = DEEP_ITM_POS_CAP + pos_v - existing_sell
+            posted_bids: set = set()
+            posted_asks: set = set()
+            for offset in V4000_LADDER_OFFSETS:
+                if room_buy > 0:
+                    bid_px = max(1, int(round(intrinsic - offset)))
+                    if bid_px <= vba - 1 and bid_px not in posted_bids:
+                        qty = min(V4000_LADDER_SIZE, room_buy)
+                        orders.setdefault(sym, []).append(Order(sym, bid_px, qty))
+                        posted_bids.add(bid_px)
+                        room_buy -= qty
+                if room_sell > 0:
+                    ask_px = int(round(intrinsic + offset))
+                    if ask_px >= vbb + 1 and ask_px not in posted_asks:
+                        qty = min(V4000_LADDER_SIZE, room_sell)
+                        orders.setdefault(sym, []).append(Order(sym, ask_px, -qty))
+                        posted_asks.add(ask_px)
+                        room_sell -= qty
+        else:
+            # VEV_4500: original single-level deep-ITM theta MM.
+            room_buy = DEEP_ITM_POS_CAP - pos_v - existing_buy
+            if room_buy > 0:
+                target_bid = int(round(intrinsic - DEEP_ITM_BID_OFFSET))
+                bid_px = min(target_bid, vbb + 1)
+                bid_px = max(1, bid_px)
+                if bid_px <= vba - 1:
+                    qty = min(DEEP_ITM_MM_SIZE, room_buy)
+                    orders.setdefault(sym, []).append(Order(sym, bid_px, qty))
 
-        room_sell = DEEP_ITM_POS_CAP + pos_v - existing_sell
-        if room_sell > 0:
-            target_ask = int(round(intrinsic + DEEP_ITM_ASK_OFFSET))
-            ask_px = max(target_ask, vba - 1)
-            if ask_px >= vbb + 1:
-                qty = min(DEEP_ITM_MM_SIZE, room_sell)
-                orders.setdefault(sym, []).append(Order(sym, ask_px, -qty))
+            room_sell = DEEP_ITM_POS_CAP + pos_v - existing_sell
+            if room_sell > 0:
+                target_ask = int(round(intrinsic + DEEP_ITM_ASK_OFFSET))
+                ask_px = max(target_ask, vba - 1)
+                if ask_px >= vbb + 1:
+                    qty = min(DEEP_ITM_MM_SIZE, room_sell)
+                    orders.setdefault(sym, []).append(Order(sym, ask_px, -qty))
 
-    # ── v12 Layer C: Passive OTM bid on VEV_5300/5400/5500 ──────────────────
-    # One-sided seller flow → bid at min(best_bid+1, floor(BS_fair-2)).
+    # ── v12 Layer C (v24 tuned): Passive OTM bid on VEV_5300/5400/5500 ─────
+    # One-sided seller flow → bid at min(best_bid+1, floor(BS_fair-EDGE)).
     # Posting BELOW best_bid is fine — taker hits all levels; we just queue.
-    # qty 5 per strike, cap +50 long. No asks (no buyer flow).
-    OTM_BID_SIZE = 5
-    OTM_BID_POS_CAP = 50
-    OTM_BID_EDGE = 2  # bid must be at least 2 below BS fair
+    # v24: SIZE 5→15, POS_CAP 50→100, EDGE 2→1 for more cascade-dump capture.
+    # Gains +$440 day-2 10k default, +$647 imc, +$456 3-day default over v23.
+    OTM_BID_SIZE = 15
+    OTM_BID_POS_CAP = 100
+    OTM_BID_EDGE = 1  # bid just 1 below BS fair (was 2)
     for K in VOUCHER_STRIKES_OTM_PASSIVE:
         sym = VOUCHER_SYM[K]
         od_v = state.order_depths.get(sym)
@@ -728,10 +968,21 @@ def run_vouchers(state, vstate):
             q = min(tb_v, OTM_BID_SIZE)
             orders.setdefault(sym, []).append(Order(sym, bid_px, q))
 
+    # v23 Layer 4 REJECTED — voucher fade on VEV_5300/5400/5500 cannot be verified
+    # in BT. test_runner.__initialize_trade_state clears state.market_trades at the
+    # start of each tick BEFORE trader.run(); OrderMatchMaker only populates it
+    # AFTER our run() returns (used for post-tick logging only). The trader can
+    # never observe market_trades in this BT framework. In production the IMC
+    # runtime DOES expose trades-since-last-call, so the strategy might work live,
+    # but we have no way to confirm. Per plan's BT-gate criterion (delta = $0 < $300):
+    # REJECT. State field fade_entry kept for potential live-only re-enable.
+
     return orders
 
 
 
+
+# ── v11 Trader (combined HP from 402045 + voucher/VFE from v9) ─────────────
 
 class Trader:
     def run(self, state: TradingState) -> Tuple[Dict[Symbol, List[Order]], int, str]:
@@ -744,11 +995,20 @@ class Trader:
         except Exception:
             raw = {}
 
-        hstate = HydrogelState.from_dict(raw.get("hg", {}))
+        # 1) HYDROGEL_PACK: 402045 spread=17 GIGA SHORT + passive MM
+        hstate = HydrogelState.from_dict(raw.get("hg", {})) if hasattr(HydrogelState, "from_dict") else HydrogelState.load(trader_data)
         hydrogel_orders, hstate = run_hydrogel(state, hstate)
         orders[Product.HYDROGEL_PACK] = hydrogel_orders
-        raw["hg"] = hstate.to_dict()
+        if hasattr(hstate, "to_dict"):
+            raw["hg"] = hstate.to_dict()
+        else:
+            trader_data = hstate.save(trader_data)
+            try:
+                raw = json.loads(trader_data) if trader_data else {}
+            except Exception:
+                raw = {}
 
+        # 2) VFE + Vouchers: v9 (Wall Mid + BS taking + intrinsic arb + MM)
         vstate = VoucherState.from_dict(raw.get("v9", {}))
         voucher_orders = run_vouchers(state, vstate)
         for sym, ord_list in voucher_orders.items():
