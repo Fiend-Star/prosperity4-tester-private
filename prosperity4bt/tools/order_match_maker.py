@@ -31,7 +31,22 @@ TAKER_PARAMS = {
                            "width_alpha": 0.0},     # R2-calibrated against round98 (submission 274128 data, 100% book match). ACO BT 1,004 vs website 1,026 (-2.2% err), total BT 8,407 vs website 8,412 (-0.1% err). width_alpha=0 = legacy behavior; uncalibrated for R4.
     "HYDROGEL_PACK":      {"qty_range": (2, 6),
                             "extra_rate": 0.0070,
-                            "width_alpha": 0.0},    # R3 day-2 1k qty distribution: min=2, max=6, mean=4 (311 trades, 1244 vol). extra_rate=0.0070 user-provided (2026-04-25). Uncalibrated against website fills — pending backtester-fidelity sweep.
+                            "width_alpha": 0.0},    # R3 calibrated against v19 sub 406831 day-2 1k: imc HP $13,526 vs actual $13,543 (0.13% err). qty_range = (2, 6) = day-2 1k trades CSV min/max.
+    "VELVETFRUIT_EXTRACT": {"qty_range": (3, 8),
+                            "extra_rate": 0.060,
+                            "width_alpha": 0.0},    # R3 calibrated: gives $1,565 vs target $1,564 (DEAD-ON, 0.06% err).
+    "VEV_4000":            {"qty_range": (1, 3),
+                            "extra_rate": 0.004,
+                            "width_alpha": 0.0},    # R3 calibrated iter 4: 0.0035 gave $113 (target $134). Bumping slightly.
+    "VEV_4500":            {"qty_range": (1, 3),
+                            "extra_rate": 0.009,
+                            "width_alpha": 0.0},    # R3 calibrated iter 4: 0.011 gave $125 (target $99). Lowering slightly.
+    "VEV_5000":            {"qty_range": (1, 3),
+                            "extra_rate": 0.0,
+                            "width_alpha": 0.0},    # R3 disabled: supplement adverse-selects on this product (gave -$16 vs target +$25). Day-2 1k has 0 takers in CSV; live website gain comes from a mechanism not modeled by inside-spread supplement. Leave unsupplemented.
+    "VEV_5100":            {"qty_range": (1, 3),
+                            "extra_rate": 0.002,
+                            "width_alpha": 0.0},    # R3 calibrated: 0.002 gave $14 (target $12, 17% err — within noise).
 }
 
 
