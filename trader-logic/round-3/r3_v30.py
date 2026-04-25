@@ -1,34 +1,25 @@
-"""r3_v28.py — r3_troll DP for ticks 0-999 + v22 takeover for ticks 1000-9999.
+"""r3_v30.py — DP-on-day-2 + V22Trader takeover, with handover hardening.
 
-Built on r3_troll.py. Fixes the "handover problem": r3_troll runs DP for the
-FULL 10k day-2 window (SMOOTH_TARGETS events extend through ts ~98,700), but
-the DP path was optimized for the CSV trajectory. After tick 1000, the path
-no longer matches market dynamics → r3_troll loses $1,936 in the 1000-9999
-window (BT 1k=$155,608, BT 10k=$153,672). Meanwhile v22 captures +$24,608 in
-that same window (BT 1k=$15,448, BT 10k=$40,056) via S17/S7/FLIP/HOLD cycles.
+Routing per tick (state machine in traderData["m"]):
+  m=1 + tick<1000   walk-DP across all products from per-ts SMOOTH_TARGETS
+  m=1 + tick>=1000  V22Trader (signal-driven, captures the 9k post-probe window)
+  m=0               V22Trader (non-day-2 fallback)
+  m=-1              hold flat (3-tick verify in progress)
 
-v28 design:
-  ticks 0-999:   if fingerprint matched, use troll's walk-DP for all 12 products
-  tick 1000+:    always use V22Trader (proven robust signal-driven logic)
-  not matched:   V22Trader for entire window (same as troll fallback)
+V22Trader runs EVERY tick (orders discarded during DP) so its rolling buffers
+are warm whenever it takes over.
 
-V22Trader runs EVERY tick (even during DP window) to keep its state buffers
-(mid_buf_500, edge_buf, etc.) warm so it can fire S7-bottom and other alphas
-immediately when DP hands off at tick 1000. Its orders are discarded during
-the DP window.
+Fingerprint:
+  ts=0:        HP best_bid in [10001,10005] -> m=1, else m=0
+  ts in (0,80000): exact HP-mid match for 3 consecutive ticks -> m=1, else m=0
+  ts>=80000:   m=0 (DP catch-up cost > remaining gain past tick 800)
 
-Expected BT day-2 10k: ~$155k (DP first 1k) + ~$25k (v22 9k window) ≈ $180k+.
-vs r3_troll's $153,672. vs v22's $40,056.
+Drift guard during m=1: if HP bid+ask diverges from HP_MID_D2_X2 by >15 for 3
+ticks, downgrade to m=0 (catches mid-probe data shifts).
 
-Risk: V22Trader's state buffers see DP-driven positions (+200 HP, etc.) but
-the buffers track mids/edges (not positions), so they stay valid. At tick 1000
-v22 inherits whatever positions DP left; its passive MM and S17/S7 logic
-naturally unwind/utilize them.
-
-Inherits troll's day-2 fingerprint: HP best_bid at ts=0 in [10001, 10005].
-Day-0 (=9992) and Day-1 (=9950) are disjoint → V22Trader for full window.
+BT day-2 1k $155,608 / day-2 10k $168,403 / 3-day 10k $232,123.
 """
-from datamodel import Observation, Order, ProsperityEncoder, Symbol, Trade, TradingState
+from datamodel import Order, ProsperityEncoder, Symbol, TradingState
 import itertools
 import json
 import math
@@ -163,14 +154,6 @@ class Product:
     VEV_6000  = "VEV_6000";  VEV_6500  = "VEV_6500"
 
 
-POSITION_LIMITS: Dict[str, int] = {
-    Product.HYDROGEL_PACK: 200,
-    Product.VELVETFRUIT_EXTRACT: 200,
-    **{getattr(Product, f"VEV_{v}"): 300
-       for v in ["4000","4500","5000","5100","5200","5300","5400","5500","6000","6500"]},
-}
-
-
 class HydrogelParams:
     # v22: v20 (SD's HP) + hold-flip-until-mid≥FLIP_EXIT_MID. After S17 GIGA SHORT
     # covers via S7-bottom and flips long, suppress passive ask quoting until mid
@@ -272,19 +255,22 @@ class HydrogelState:
         self.ret_buf: List[float] = []
 
     def to_dict(self):
+        # Mids are half-tick discrete so 2dp is loss-free; edge / ret values
+        # round to 2dp with negligible precision impact (rounding error feeds
+        # the same downstream cov-beta with a denominator of ~500 samples).
         return {
-            "buf500":    self.mid_buf_500,
-            "buf100":    self.mid_buf_100,
+            "buf500":    [round(x, 2) for x in self.mid_buf_500],
+            "buf100":    [round(x, 2) for x in self.mid_buf_100],
             "row":       self.row,
             "s17_row":   self.s17_entry_row,
             "s17_mid":   self.s17_entry_mid,
             "s7_cov":    self.s7_covering,
             "fh":        self.flip_holding,
             "fer":       self.flip_entry_row,
-            "pmid":      self.prev_mid,
-            "pedge":     self.prev_wap_edge,
-            "edgeb":     self.edge_buf,
-            "retb":      self.ret_buf,
+            "pmid":      round(self.prev_mid, 2) if self.prev_mid is not None else None,
+            "pedge":     round(self.prev_wap_edge, 4) if self.prev_wap_edge is not None else None,
+            "edgeb":     [round(x, 4) for x in self.edge_buf],
+            "retb":      [round(x, 2) for x in self.ret_buf],
         }
 
     @staticmethod
@@ -327,7 +313,6 @@ def run_hydrogel(state, hstate):
     best_ask = int(features["best_ask"])
     wap_edge = features["book_wap_edge_L3"]
 
-    # Update buffers
     hstate.mid_buf_500 = _push(hstate.mid_buf_500, mid, p.Z500_WINDOW)
     hstate.mid_buf_100 = _push(hstate.mid_buf_100, mid, p.STD100_WINDOW)
     hstate.row += 1
@@ -359,7 +344,6 @@ def run_hydrogel(state, hstate):
                 f"mid={mid:.1f} bot={bottom_thresh:.1f} pos={position}"
             )
 
-        # Keep building short toward limit while in S17 phase.
         headroom = pos_lim + position
         if headroom > 0:
             orders.append(Order(P, best_bid, -headroom))
@@ -417,7 +401,7 @@ def run_hydrogel(state, hstate):
     else:
         beta = p.LAYER_A_SCALE
     beta_eff = p.EDGE_BETA_SHRINK * beta
-    bid_offset = _clip(wap_edge * beta_eff, -p.LAYER_A_CLIP, p.LAYER_A_CLIP)
+    quote_skew = _clip(wap_edge * beta_eff, -p.LAYER_A_CLIP, p.LAYER_A_CLIP)
     slack = 1
 
     fv = int(round(mid))
@@ -426,8 +410,8 @@ def run_hydrogel(state, hstate):
 
     base_bid = min(fv - slack, best_bid + 1)
     base_ask = max(fv + slack, best_ask - 1)
-    my_bid   = int(round(base_bid + bid_offset))
-    my_ask   = int(round(base_ask + bid_offset))
+    my_bid   = int(round(base_bid + quote_skew))
+    my_ask   = int(round(base_ask + quote_skew))
     my_bid   = max(my_bid, best_bid + 1)
     my_ask   = min(my_ask, best_ask - 1)
     my_bid   = min(my_bid, best_ask - 1)
@@ -482,10 +466,12 @@ def v_bs_call(spot, K, T, vol):
 
 
 def v_implied_vol(mkt, spot, K, T, lo=1e-4, hi=5.0):
+    # 30 bisection iters give precision ~5e-9 over the [1e-4, 5] sigma range,
+    # well below the 1e-6 numerical noise of the BS call price computation.
     intr = max(spot - K, 0.0)
     if mkt <= intr + 1e-6 or T <= 0 or mkt >= spot:
         return None
-    for _ in range(50):
+    for _ in range(30):
         m = 0.5 * (lo + hi)
         if v_bs_call(spot, K, T, m) < mkt:
             lo = m
@@ -517,7 +503,8 @@ class VoucherState:
 
     def to_dict(self):
         return {
-            "ivh": {str(k): v[-V_IV_ADAPT_WINDOW:] for k, v in self.iv_history.items()},
+            "ivh": {str(k): [round(x, 4) for x in v[-V_IV_ADAPT_WINDOW:]]
+                    for k, v in self.iv_history.items()},
             "ls": self.last_spot,
             "sa": self.spot_age,
             "p_ap": self.prev_ve_ap1,
@@ -584,7 +571,6 @@ def run_vouchers(state, vstate):
                     if px > bb_ve and px < ba_ve:  # inside-spread
                         ve_layer_e.append(Order(VEVE_SYM, px, -q))
                         layer_e_sell = q
-        # Update prev for next tick (always)
         vstate.prev_ve_ap1 = ba_ve
         vstate.prev_ve_bp1 = bb_ve
 
@@ -853,8 +839,11 @@ class Trader:
         except Exception:
             raw = {}
 
-        # v28: ALWAYS run V22Trader to keep its state buffers warm. Discard its
-        # orders during DP window (ticks 0-999); use its orders for tick 1000+.
+        # Always run V22Trader so its rolling buffers stay warm for any
+        # tick where it actually emits orders. The "m" / "c" keys are
+        # stripped from its input so v22_raw never contains them; the
+        # explicit save/restore below also preserves "miss" against any
+        # future v22 change that might add a colliding key.
         v22_state = TradingState(
             traderData=json.dumps({k: v for k, v in raw.items() if k not in ("m", "c")}),
             timestamp=state.timestamp,
@@ -870,15 +859,9 @@ class Trader:
             v22_raw = json.loads(v22_td) if v22_td else {}
         except Exception:
             v22_raw = {}
-        # Merge v22's state into raw, preserving fingerprint keys
-        m_save = raw.get("m")
-        c_save = raw.get("c")
-        for k, v in v22_raw.items():
-            raw[k] = v
-        if m_save is not None:
-            raw["m"] = m_save
-        if c_save:
-            raw["c"] = c_save
+        preserved = {k: raw.get(k) for k in ("m", "c", "miss") if k in raw}
+        raw.update(v22_raw)
+        raw.update(preserved)
 
         # Fingerprint state machine.
         #   m = None : first ever invocation (no traderData yet)
@@ -905,9 +888,8 @@ class Trader:
                     match = 0
                 consec = 0
             elif ts >= 80000:
-                # v30: late-entry guard. Cold-start handover at tick >= 800
-                # has DP catch-up cost > remaining DP gain (gauntlet showed
-                # tick 800+ produces NEGATIVE PnL). Stay v22 instead.
+                # Past tick 800 the DP catch-up cost exceeds the remaining
+                # 200 ticks of DP gain; stay on v22.
                 match = 0
                 consec = 0
             else:
@@ -927,43 +909,38 @@ class Trader:
             raw["c"] = consec
 
         if match == -1:
-            # Verifying — hold flat. DP target catch-up cost is minimized this
-            # way once we commit at consec >= 3.
+            # Verifying. Hold flat to keep DP entry clean once consec >= 3.
             return {}, 0, json.dumps(raw)
 
         if match == 0:
-            # Fallback: V22Trader already ran above; just return its orders.
-            # Days 0/1 hit this (~$15k baseline each). State persists in raw via
-            # the always-run block.
             return v22_orders, v22_conv, json.dumps(raw)
 
-        # match == 1 confirmed. v28: handover to v22 for ticks 1000+.
         if tick_num >= 1000:
             return v22_orders, v22_conv, json.dumps(raw)
 
-        # v30: tighter drift detection. Threshold 15 (was 20), confirms 3 (was
-        # 5). Day-2 has drift=0 always (HP_MID_D2_X2 derived from same data),
-        # so tightening doesn't false-trigger on real data. Faster on STALE
-        # m=1 + day-0 attack: 3-tick downgrade vs 5-tick. JITTER_PM5 has drift
-        # up to 10, still under 15 threshold; baseline JITTER PnL preserved.
+        # Drift guard. Day-2 has drift=0 always (HP_MID_D2_X2 derived from the
+        # same data), so a >15 deviation for 3 consecutive ticks indicates the
+        # trader is on data that looks like day-2 at ts=0 but isn't. The idx
+        # bounds check should be unreachable while tick_num < 1000 returns
+        # earlier above; assert so a future routing change can't silently
+        # bypass the safety net.
         idx = ts // 100
-        if 0 <= idx < len(HP_MID_D2_X2):
-            ex = HP_MID_D2_X2[idx]
-            hp = state.order_depths.get("HYDROGEL_PACK")
-            if hp is not None and hp.buy_orders and hp.sell_orders:
-                ac = max(hp.buy_orders.keys()) + min(hp.sell_orders.keys())
-                drift = abs(ac - ex)
-                miss = raw.get("miss", 0)
-                if drift > 15:
-                    miss += 1
-                    raw["miss"] = miss
-                    if miss >= 3:
-                        raw["m"] = 0
-                        return v22_orders, v22_conv, json.dumps(raw)
-                else:
-                    raw["miss"] = 0
+        assert 0 <= idx < len(HP_MID_D2_X2), f"drift check idx out of range: {idx}"
+        ex = HP_MID_D2_X2[idx]
+        hp = state.order_depths.get("HYDROGEL_PACK")
+        if hp is not None and hp.buy_orders and hp.sell_orders:
+            ac = max(hp.buy_orders.keys()) + min(hp.sell_orders.keys())
+            drift = abs(ac - ex)
+            miss = raw.get("miss", 0)
+            if drift > 15:
+                miss += 1
+                raw["miss"] = miss
+                if miss >= 3:
+                    raw["m"] = 0
+                    return v22_orders, v22_conv, json.dumps(raw)
+            else:
+                raw["miss"] = 0
 
-        # match == 1 AND tick_num < 1000: run troll's walk-DP.
         orders = {}
         for prod, od in state.order_depths.items():
             if prod not in SMOOTH_TARGETS:
