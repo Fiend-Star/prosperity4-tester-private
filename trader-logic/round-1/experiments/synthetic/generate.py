@@ -46,6 +46,29 @@ Generates 13 days in prosperity4bt/resources/round99/:
                          anchor snap landing at 10008. v17 should fail here;
                          v18's median-of-20 bootstrap + frozen MAD-from-anchor
                          threshold should absorb it.)
+  day 14 — ASYM_MEAN    (R4-prep Phase 3.2: ACO mean drifts to 9982 instead of
+                         10000 throughout. Reproduces the R2 day-1 failure mode
+                         where r1_v17's hardcoded anchor=10000 would have fired
+                         crash_mode 67.5% of ticks. Adaptive-EMA strategies should
+                         track to 9982; hardcoded-anchor strategies should fail.)
+  day 15 — MULTI_LEVEL_POST (R4-prep Phase 3.2: ACO book has 3 bid + 3 ask levels
+                         every tick with declining volume. Tests whether
+                         multi-level posting strategies capture deeper-level
+                         flow vs single-level competitors.)
+  day 16 — DRIFT_REVERSAL (R4-prep Phase 3.2: IPR drifts +2/tick for 500 ticks
+                         then -2/tick for rest of day. Tests day-type detection
+                         invalidation logic — strategies that lock direction at
+                         row 20 should bail out via MTM safety override.)
+  day 17 — FLAT_WIDE_SPREAD (R4-prep Phase 3.2: ACO is mean-reverting with
+                         spread=17 for 20% of ticks (cluster pattern). Mirrors
+                         R3 HYDROGEL_PACK's wide-spread cluster regime that
+                         drove the GIGA SHORT alpha. Tests spread-state-conditional
+                         strategies (e.g., 402045's spread=17 trigger).)
+  day 18 — DYNAMIC_TAKER (R4-prep Phase 3.2: ACO with mid stable but takers
+                         arrive at higher rate when our quotes are inside
+                         spread (simulated via increased trade frequency).
+                         Tests whether width-dependent fill-rate calibration
+                         is being modeled.)
 
 Regenerate with different seed to test robustness.
 """
@@ -68,7 +91,7 @@ PRICE_HEADER = (
 TRADE_HEADER = "timestamp;buyer;seller;symbol;currency;price;quantity"
 
 
-UPTREND_DAYS = {0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}  # IPR uptrend baseline for crash/FV test days
+UPTREND_DAYS = {0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18}  # IPR uptrend baseline (day 16 has its own pattern)
 
 # Day 13 ASYM_OPEN parameters. Real 272466 day-1 opened with bid=9998/ask=10016
 # (mid=10007), 7 ticks above true FV=10000. v17's first-tick anchor snap
@@ -77,11 +100,29 @@ UPTREND_DAYS = {0, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}  # IPR uptrend baseline for
 ASYM_OPEN_TICKS = 30        # ticks the biased open persists
 ASYM_OPEN_BIAS = 7.0        # mid offset above true FV during biased open
 
+# Day 14 ASYM_MEAN parameters. Reproduces R2 day-1 ACO regime where mean was
+# 9982 (NOT 10000 — see project_round2_final.md). Tests whether adaptive-FV
+# strategies track the actual mean vs hardcoded 10000 anchors.
+ASYM_MEAN_TARGET = 9982.0   # actual R2 day-1 ACO mean
+
+# Day 17 FLAT_WIDE_SPREAD parameters. R3 HP empirically has spread=17 cluster
+# 5-10% of ticks (alpha_hunt) with mid above local mean — drives the GIGA SHORT.
+WIDE_SPREAD_PROB = 0.20     # fraction of ticks that get spread=17 widening
+WIDE_SPREAD_VAL = 17        # the wide-spread value to inject
+
 
 def ipr_mid(tick: int, day: int, rng: random.Random) -> float:
     base = 12_000.0
     noise = rng.gauss(0, 1.0)
-    if day in UPTREND_DAYS:
+    if day == 16:
+        # DRIFT_REVERSAL: +2/tick first 500 ticks, then -2/tick rest of day.
+        # Tests day-type detector invalidation (locks UP at row 20, then must
+        # bail when MTM goes negative for 40 consecutive rows).
+        if tick < 500:
+            drift = 2.0 * tick
+        else:
+            drift = 2.0 * 500 - 2.0 * (tick - 500)
+    elif day in UPTREND_DAYS:
         drift = 0.01 * tick
     elif day == 1:
         drift = 0.0
@@ -121,6 +162,12 @@ _ACO_BASES: dict[int, "tuple[callable, float]"] = {
         lambda t: 10_000.0 + ASYM_OPEN_BIAS if t < ASYM_OPEN_TICKS else 10_000.0,
         1.5,
     ),
+    14: (lambda t: ASYM_MEAN_TARGET, 1.5),  # ASYM_MEAN: stable at 9982 (R2 day-1 reproduction)
+    15: (lambda t: 10_000.0, 1.5),          # MULTI_LEVEL_POST: stable mid; signal in deeper book
+    # day 16 DRIFT_REVERSAL handled in ipr_mid (IPR-level pattern, ACO stable)
+    16: (lambda t: 10_000.0, 1.5),
+    17: (lambda t: 10_000.0, 1.5),          # FLAT_WIDE_SPREAD: stable mid; signal in spread state
+    18: (lambda t: 10_000.0, 1.5),          # DYNAMIC_TAKER: stable mid; signal in taker rate
 }
 
 
@@ -178,6 +225,12 @@ def build_book(mid: float, spread: int, rng: random.Random,
                day: int = 0,
                aco_recent_mids: list | None = None,
                aco_future_mids: list | None = None) -> tuple:
+    # Day 17 FLAT_WIDE_SPREAD: with WIDE_SPREAD_PROB probability, force spread=17
+    # and offset mid up by 5 ticks (cluster at local "peak" — matches R3 HP pattern).
+    if day == 17 and rng.random() < WIDE_SPREAD_PROB:
+        spread = WIDE_SPREAD_VAL
+        mid = mid + 5.0
+
     half = spread / 2
     bid1 = int(mid - half)
     ask1 = int(mid + half)
@@ -192,7 +245,15 @@ def build_book(mid: float, spread: int, rng: random.Random,
     ask2 = ask1 + rng.randint(1, 3)
     b2v = int(b1v * rng.uniform(1.5, 3.0))
     a2v = int(a1v * rng.uniform(1.5, 3.0))
-    if rng.random() < 0.3:
+
+    # Day 15 MULTI_LEVEL_POST: ALWAYS emit 3 levels per side with declining vol.
+    # Tests whether multi-level posting strategies capture deeper-level flow.
+    if day == 15:
+        bid3 = bid2 - rng.randint(1, 2)
+        ask3 = ask2 + rng.randint(1, 2)
+        b3v = rng.randint(15, 40)  # larger than default for clearer signal
+        a3v = rng.randint(15, 40)
+    elif rng.random() < 0.3:
         bid3 = bid2 - rng.randint(1, 2)
         ask3 = ask2 + rng.randint(1, 2)
         b3v = rng.randint(10, 30)
@@ -213,8 +274,12 @@ def _emit_product(day: int, ts: int, product: str, bids, asks) -> str:
     return f"{day};{ts};{product};{fmt_book(bids, asks)};{mid_snap};0.0"
 
 
-def _maybe_trade(rng: random.Random, ts: int, product: str, bids, asks) -> str | None:
-    if rng.random() >= 0.30:
+def _maybe_trade(rng: random.Random, ts: int, product: str, bids, asks,
+                 day: int = 0) -> str | None:
+    # Day 18 DYNAMIC_TAKER: 50% taker rate (vs 30% default) — proxies for
+    # the tighter-spread-attracts-more-takers behaviour we want to model.
+    rate = 0.50 if day == 18 else 0.30
+    if rng.random() >= rate:
         return None
     side = rng.choice(["buy", "sell"])
     qty = rng.randint(2, 15)
@@ -267,7 +332,7 @@ def write_day(day: int):
             ("INTARIAN_PEPPER_ROOT", ipr_bids, ipr_asks),
             ("ASH_COATED_OSMIUM", aco_bids, aco_asks),
         ]:
-            row = _maybe_trade(rng, ts, product, bids, asks)
+            row = _maybe_trade(rng, ts, product, bids, asks, day=day)
             if row is not None:
                 trade_rows.append(row)
 
@@ -280,6 +345,8 @@ REGIME_LABELS = [
     "ACO_CRASH", "ACO_FLASH", "PERMANENT", "CRASH_DEEP",
     "ALT_FV_HIGH", "ALT_FV_LOW", "MID_SHIFT", "DEFENSE_BOT", "VOLUME_BURST",
     "ASYM_OPEN",
+    # R4-prep Phase 3.2 additions
+    "ASYM_MEAN", "MULTI_LEVEL_POST", "DRIFT_REVERSAL", "FLAT_WIDE_SPREAD", "DYNAMIC_TAKER",
 ]
 
 
