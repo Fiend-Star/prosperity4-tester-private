@@ -2,8 +2,16 @@
 
 ## Summary
 
-**Submission: `r3_v3.py`** (if structural arb ever fires on live data) / fallback **`r3_v1.py`** (proven +28k BT)
-- 3-day BT: **+28,013** (Day 0 +13,617 | Day 1 +11,896 | Day 2 +2,500) — both v1 and v3 identical in BT
+**SUBMISSION: `r3_v9.py`** — v7 base + safe BS voucher taking (BS_EDGE=10, adaptive sigma via rolling IV median)
+- **3-day BT: +$47,318** (Day 0 +17,238 | Day 1 +16,006 | Day 2 +14,075) — essentially tied with v7
+- **1k-tick day 0: +$2,074** vs v7 $1,006 (+106%)
+- **1k-tick day 2: +$2,596** vs v7 $2,538 (+2%)
+- Expected leaderboard rank: top ~25% (vs current 59th percentile at $1,177)
+
+Previous best: `r3_v7.py` ($47,388 3-day, $2,538 1k-tick day 2) — Wall Mid for VFE breakthrough
+Previous submissions:
+- `r3_v3.py` — fallback (+$28,013 3-day BT)
+- `r3_v1.py` — original baseline (+$28,013, identical to v3 in BT)
 - Per product:
   - HYDROGEL_PACK: +23,247 (MM spread capture, weak on day 2)
   - VELVETFRUIT_EXTRACT: +512 net (swings +3.6k / -2.6k / -0.6k)
@@ -26,8 +34,31 @@
 - `r3_v3.py` — **v3 SUBMISSION CANDIDATE**. v1 + strict intrinsic arb on all 10 strikes + call-spread arb scanner on all 45 pairs + vol-scaled HYDROGEL_PACK MM. **Identical BT PnL to v1** (arbs don't fire on BT data — insurance for live).
 - `r3_v3_theta.py` — A/B variant with terminal theta harvest. No effect in BT (may help on website if round-end liquidation uses intrinsic/BS-theoretical).
 - `r3_v4.py` — v3 + EDA-driven attempts (OBI predictor, size scale-up). All disabled — both add no value or destroyed PnL. Final architecture identical to v3 (+28k BT).
+- `r3_v5.py` — v3 + VR(20) directional via VEV_4000. Tested both mean-reversion (-$40k/day 1k-tick) and trend-follow (-$44k/day). Both fail because spread=$20 ≫ signal value. Directional disabled; v5 = v3 effectively.
+- `r3_v6.py` — Aggressive MM test (TAKE_OFFSET=1, no pos-aggression). Lost -$80k 3-day. Top traders are NOT just being more aggressive.
+- **`r3_v7.py`** — **CURRENT SUBMISSION**. Wall Mid for VELVETFRUIT_EXTRACT (P3-winner technique from playbook §4). Plain mid for HYDROGEL_PACK (Wall Mid hurt on 1k-tick window). IV smile disabled (-$500 net). 3-day +$47k.
+- `r3_v8.py` — v7 + BS voucher MM (fixed sigma=0.20, edge=1.6 ticks) + delta hedge. Inspired by competitor 392245.py. Day 0 1k-tick +$7k (huge gain) but DAY 2 10K -$14k (catastrophic). 3-day total $4.5k. **NOT SUBMITTED**. Same vol-regime fragility as competitor.
+
+## v8 Lesson: Fixed-sigma BS voucher MM fails (2026-04-25)
+
+Tested replicating competitor 392245.py's BS voucher trading. Fixed sigma=0.20 (matches our EDA mean IV across days). Edge=1.6 ticks. Position-limit aware delta hedge into VFE.
+
+**Results**:
+| Window | r3_v7 | r3_v8 | Δ |
+|---|---:|---:|---:|
+| 10k 3-day | **$47,388** | $4,564 | **−$42,824** |
+| 1k day 0 | $1,006 | **$7,035** | +$6,029 |
+| 1k day 1 | **$1,866** | -$4,792 | -$6,658 |
+| 1k day 2 | **$2,538** | $1,820 | -$718 |
+
+Day 0 looks amazing (BS captures IV mispricing on calm market) but days 1-2 explode losses (-$14k day 2 10k). **Same fragility as competitor**: BS-based voucher trading loses massively when underlying vol is non-stationary across the day. Fixed sigma doesn't help because the issue is mid-day regime shifts, not initial calibration.
 - `notes/voucher_analysis.py` — Exhaustive EDA script (8 parts: dynamics, IV, smile, no-arb, cross-product, taker flow, regimes, deep-ITM TV).
 - `notes/voucher_analysis_output.txt` — EDA output (~320 lines).
+- `notes/iv_visualization.py` — Generates 4 IV plots (matplotlib).
+- `notes/iv_plots/{smile_per_day,iv_timeseries,delta_iv_distribution,smile_residuals}.png` — Visual IV diagnostics.
+- `notes/recalibration_1k.md` — 1k-tick BT comparison + website vs BT analysis.
+- `R3_BRIEF.md` — Official R3 wiki brief (saved verbatim for record).
+- `oracle/god_logger_r3.py` — Pristine market state logger (submitted as 384367 — confirmed stdout NOT captured by website).
 - `r3_v1a..r3_v1e.py` — v1 iteration history.
 - `r3_v2.py`, `r3_v2b.py` — v2 IV surface experiments. Underperform v1 by $1.6k / $7.7k — abandoned.
 - `manual_r3_solver.py` — Nash solver with cycle detection.
@@ -65,9 +96,107 @@ Things to try for v3+:
 - Use raw strikes (no log-moneyness transform) for fit — simpler, maybe more robust.
 - Calibrate `imc` mode after first website submission before re-testing v2.
 
+## Backtester Score Verification (2026-04-25)
+
+| Backtester | Source | r3_v3 score (3-day, 10k ticks) | Match |
+|---|---|---:|:---:|
+| Ours (Python fork of jmerle P3) | local | $28,013 (D0:13,617, D1:11,896, D2:2,500) | ✓ |
+| Xeeshan85's prosperity4btx 3.0.2 | `pip install -U prosperity4btx` | **$28,013 (identical per-product)** | ✓ |
+| Website test (383883) | submission | $1,177 (1k-tick day 2 only) | matches BT 1k = $1,013 × 1.16 |
+
+Two independent backtester implementations produce **identical** PnL down to the dollar. Confirms our matching engine is correct. The $1,177 website score reflects the 10× shorter test window (1k vs 10k ticks).
+
+## Top Trader PnL Curve Analysis (intel/image.png)
+
+User-shared chart shows top trader PnL going **0 → ~$80,000 over 1,000 ticks** (timestamps 500-99,900). Pattern:
+
+- Slow start (first 20% of time): drawdown to -$5k, recovery
+- Mid-day acceleration (33k-40k timestamps): rapid surge +$20k
+- Steady climb 40k-75k: gradual accumulation +$30k
+- Late surge 75k-90k: another rapid surge to $80k
+- Plateau at end: $80k with $5-10k volatility
+
+Average gain: **~$80 per tick**.
+
+This profile suggests **NOT** a single big directional bet — it's many small wins compounding. Most likely candidates:
+1. **Aggressive MM on delta-1 products** with very high turnover (no inventory caps, capture spread on every cycle)
+2. **Multi-product simultaneous MM** with full position limits (200+200+10×300 = 3400 contract capacity)
+3. **Specific timing-based entry** at 33k and 75k (event detection)
+
+Our v3 captures ~$1/tick. Top traders ~$80/tick. Need 80× more aggressive turnover or fundamentally different alpha.
+
+## R3 Leaderboard Reality Check (2026-04-25)
+
+Community leaderboard (1641 verified submissions, 1506 deduped):
+
+| Rank | Score | Notes |
+|---|---:|---|
+| #1 | $154,335 | Recovery 14.82, MaxDD $10.4k |
+| #4 | $139,812 | |
+| #10 cutoff | $102,128 | |
+| Median | $739 | 70.7% profitable |
+| Avg | $2,268 | |
+| **Our (#615)** | **$1,177** | **59.2 percentile** |
+
+**Universal 1k-tick test confirmed** — all submissions on same window. Top traders pulling **100×+ our PnL** on identical data.
+
+**Failed v5 hypothesis**: directional trading via VEV_4000 (delta≈1) using VR(20)=0.7 mean-reversion signal. Both MR (-$40k/day) and trend-follow (-$44k/day) lose because $20 spread on VEV_4000 ≫ signal value × position size. Top traders are NOT doing naive direction bets via vouchers.
+
+**Unsolved**: where does the $100k alpha come from? Unknown. Candidate hypotheses for future investigation:
+1. Sophisticated quote-prediction (predict MM bot's next quote, post 1 tick ahead)
+2. Some specific combination of strikes/timing we haven't tested
+3. A known matching engine quirk that pays off massively
+
+## Run Log Analysis (2026-04-25)
+
+### Submission 383883 — r3_v3 algorithmic
+- Total profit: **+1,177.52** (day 2 only, 1,000 ticks)
+- HYDROGEL_PACK: +610 | VELVETFRUIT_EXTRACT: +526 | VEV_5000-5200: +41 (small) | rest: 0
+- XIRECS (manual): +88,759 (pre-submitted bids)
+- Final positions: HP -19, VE +19, VEV_5000/5100/5200: +3 each (tiny inventory)
+
+### Submission 384367 — god_logger_r3
+- Total profit: 0 (logger doesn't trade — confirmed)
+- **Critical finding: stdout NOT captured by website.** Print statements thrown away.
+- ActivitiesLog confirms 1,000 ticks per day (not 10,000). 10× less data than BT.
+- Order books match BT exactly at all sampled timestamps.
+
+### Calibrated expectation
+- Website day 2 (1k ticks): $1,177 ≈ BT 1k-tick $1,013 × 1.16 noise factor
+- For 3-day final (if 10k each): expected ~$8-12k website PnL
+- BT $28k (10k×3 days) → divide by 10x tick count → $2.8k 1k-equivalent → 3 days × ~$1.2k = $3.6k expected if final uses 1k tickeach. Likely 10k for final.
+
+## v7 BREAKTHROUGH: Wall Mid (2026-04-25)
+
+Discovered the **Wall Mid** insight from `imc_prosperity_playbook.md` §4:
+
+> Wall Mid = midpoint of HIGHEST-VOLUME bid/ask levels.
+> Tracks IMC's hidden fair value far more accurately than (best_bid+best_ask)/2.
+> **Every 2nd-place team across all three editions used this technique.**
+
+```python
+# jmerle's reference implementation
+popular_buy_price = max(buy_orders.items(), key=lambda kv: kv[1])[0]
+popular_sell_price = min(sell_orders.items(), key=lambda kv: kv[1])[0]  # most-negative vol = largest size
+true_value = (popular_buy_price + popular_sell_price) / 2
+```
+
+**v7 PnL impact** vs v3 baseline:
+
+| Component | v3 | v7 | Δ |
+|---|---:|---:|---:|
+| VELVETFRUIT_EXTRACT day 2 (10k) | -$563 | **+$11,437** | **+$12,000** |
+| VELVETFRUIT_EXTRACT 3-day (10k) | $512 | $19,888 | +$19k |
+| HYDROGEL_PACK | $23,247 | $23,247 | 0 (kept plain mid — Wall Mid hurt 1k-tick) |
+| Vouchers | $4,253 | $4,253 | 0 (no change) |
+| **Total 3-day BT** | **$28,013** | **$47,388** | **+$19,375 (+69%)** |
+| **1k-tick day 2** | **$1,013** | **$2,538** | **+$1,525 (+151%)** |
+
+**Key finding**: Wall Mid for HYDROGEL_PACK HURTS on 1k-tick window (loses -$2k) but helps on full 10k. Used hybrid: Wall Mid for VFE only.
+
 ## Open Items
 
-- [ ] Submit **r3_v3** (or r3_v1 as safer fallback) to website, record per-product PnL.
+- [ ] Submit **r3_v7** (primary) or r3_v3 (safer fallback) to website, record per-product PnL.
 - [ ] Calibrate `imc` mode `extra_rate` from v3 website result (CSV != website; see `memory/feedback_backtester.md`).
 - [ ] Investigate HYDROGEL_PACK day 2 weakness (-116) — vol-scaled MM didn't help in BT (spread=16 is wide enough that post is always best±1 regardless of slack).
 - [ ] After website feedback: if v3 structural arbs fire often, tune ARB_SAFETY_MARGIN and sizes.
