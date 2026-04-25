@@ -1,3 +1,4 @@
+import math
 import zlib
 from prosperity4bt.datamodel import TradingState, Order, Symbol, Trade
 from prosperity4bt.models.input import BacktestData, MarketTrade
@@ -12,11 +13,22 @@ from prosperity4bt.models.test_options import TradeMatchingMode, MatchMode
 # and fills our resting quote. These takers are invisible in the CSV trades
 # file — they materialise only when our post improves the MM's best, which
 # is the mechanism behind the website's extra fill count.
+#
+# width_alpha (Phase 3.1, R4-prep, opt-in):
+#   Effective fill rate = extra_rate * exp(-width_alpha * (width - 1))
+#   where width = ticks our resting order is inside the MM's quote (≥1).
+#   width_alpha = 0.0 (default): no width penalty, behaviour identical to legacy.
+#   width_alpha > 0: deeper-inside posts get fewer fills (penalises overfit
+#     "post super-narrow → win everything" strategies).
+#   Calibrate via extending trader-logic/round-2/calibrate_imc.py to bin
+#   R2 round98 fills by width before enabling.
 TAKER_PARAMS = {
     "INTARIAN_PEPPER_ROOT": {"qty_range": (3, 17),
-                              "extra_rate": 0.0},   # R2 IPR BT 7,403 vs website 7,386 (+0.2% err). 4 extra website fills are taker round-trips (+2 PnL net); no supplement needed.
+                              "extra_rate": 0.0,
+                              "width_alpha": 0.0},   # R2 IPR BT 7,403 vs website 7,386 (+0.2% err). 4 extra website fills are taker round-trips (+2 PnL net); no supplement needed.
     "ASH_COATED_OSMIUM": {"qty_range": (2, 10),
-                           "extra_rate": 0.038},    # R2-calibrated against round98 (submission 274128 data, 100% book match). ACO BT 1,004 vs website 1,026 (-2.2% err), total BT 8,407 vs website 8,412 (-0.1% err). Previous 0.030 was miscalibrated (used 274128 data vs 275130 target, -34.6% err).
+                           "extra_rate": 0.038,
+                           "width_alpha": 0.0},     # R2-calibrated against round98 (submission 274128 data, 100% book match). ACO BT 1,004 vs website 1,026 (-2.2% err), total BT 8,407 vs website 8,412 (-0.1% err). width_alpha=0 = legacy behavior; uncalibrated for R4.
 }
 
 
@@ -211,6 +223,7 @@ class OrderMatchMaker:
             params = TAKER_PARAMS.get(product)
             if params and params.get("extra_rate", 0) > 0:
                 extra_rate = params["extra_rate"]
+                width_alpha = params.get("width_alpha", 0.0)
                 ts = self.state.timestamp
                 # Deterministic hash for reproducibility (CRC32 is stable across Python processes; hash() is not).
                 tick_hash = (ts * 2654435761 + zlib.crc32(product.encode())) & 0xFFFFFFFF
@@ -219,11 +232,21 @@ class OrderMatchMaker:
                     taker_qty = qty_lo + (tick_hash >> 16) % (qty_hi - qty_lo + 1)
                     taker_sells = (tick_hash >> 8) % 2 == 0
 
-                    # Only fill if our resting order improves the MM's best
+                    # Only fill if our resting order improves the MM's best.
+                    # Phase 3.1: when width_alpha > 0, apply a second per-order
+                    # roll using effective_rate = extra_rate * exp(-alpha*(width-1)).
+                    # Backward-compatible: width_alpha=0 means rate unchanged.
                     if taker_sells and resting_buys:
                         resting_buys.sort(key=lambda x: -x[0])
                         for i, (rp, rq, order_ref) in enumerate(resting_buys):
                             if rq > 0 and (best_bid is None or rp > best_bid):
+                                if width_alpha > 0:
+                                    width = max(1, rp - (best_bid if best_bid is not None else rp - 1))
+                                    width_factor = math.exp(-width_alpha * (width - 1))
+                                    # Per-order roll uses high-bits of tick_hash for independence
+                                    order_roll = (tick_hash ^ (i * 2654435761)) & 0xFFFFFFFF
+                                    if (order_roll % 1_000_000) >= int(width_factor * 1_000_000):
+                                        continue   # too deep, no fill
                                 vol = min(rq, taker_qty)
                                 if vol > 0:
                                     fill = self.__create_buy_order(
@@ -235,6 +258,12 @@ class OrderMatchMaker:
                         resting_sells.sort(key=lambda x: x[0])
                         for i, (rp, rq, order_ref) in enumerate(resting_sells):
                             if rq > 0 and (best_ask is None or rp < best_ask):
+                                if width_alpha > 0:
+                                    width = max(1, (best_ask if best_ask is not None else rp + 1) - rp)
+                                    width_factor = math.exp(-width_alpha * (width - 1))
+                                    order_roll = (tick_hash ^ (i * 2654435761)) & 0xFFFFFFFF
+                                    if (order_roll % 1_000_000) >= int(width_factor * 1_000_000):
+                                        continue
                                 vol = min(rq, taker_qty)
                                 if vol > 0:
                                     fill = self.__create_sell_order(
