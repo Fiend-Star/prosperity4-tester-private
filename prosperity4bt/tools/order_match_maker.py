@@ -290,6 +290,69 @@ class OrderMatchMaker:
                                     resting_sells[i] = (rp, rq - vol, order_ref)
                                 break
 
+            # --- Phase 3: CSV market_trade replay for outside-spread resting orders ---
+            # Inside-spread fills are Phase 2's exclusive domain (calibrated supplement).
+            # Outside-spread orders (rp <= best_bid for buys, rp >= best_ask for sells)
+            # mirror default-mode behavior by replaying CSV market_trades. The two phases
+            # partition the resting-order space along the >best_bid / <=best_bid (and
+            # <best_ask / >=best_ask) boundary, so they never double-fill the same order.
+            # Multi-level strategies (v17 stacks bp, bp-1, bp-2 / ap, ap+1, ap+2) get
+            # their AT-best and below-best layers filled here; v18/v19 single-level
+            # strategies post inside-spread only and are unaffected (calibration preserved).
+            if self.trade_matching_mode != TradeMatchingMode.none:
+                mts_for_product = market_trades.get(product, [])
+
+                # Buys: replay against orders at-or-worse than best_bid.
+                # Includes at-best (rp == best_bid) orders since most CSV trades
+                # happen exactly at-best; restricting to strict below-best produces
+                # zero fills (the strict path was tested and silently no-op'd).
+                for i, (rp, rq, order_ref) in enumerate(resting_buys):
+                    if rq <= 0:
+                        continue
+                    if best_bid is not None and rp > best_bid:
+                        continue   # inside-spread → handled by Phase 2
+                    for mt in mts_for_product:
+                        if rq <= 0:
+                            break
+                        if mt.sell_quantity == 0:
+                            continue
+                        if mt.trade.price > rp:
+                            continue
+                        if mt.trade.price == rp and self.trade_matching_mode != TradeMatchingMode.all:
+                            continue
+                        vol = min(rq, mt.sell_quantity)
+                        if vol <= 0:
+                            continue
+                        mt.sell_quantity -= vol
+                        fill = self.__create_buy_order(order_ref, vol, rp, mt.trade.seller)
+                        our_trades.append(fill)
+                        rq -= vol
+                    resting_buys[i] = (rp, rq, order_ref)
+
+                # Sells: replay against orders at-or-worse than best_ask.
+                for i, (rp, rq, order_ref) in enumerate(resting_sells):
+                    if rq <= 0:
+                        continue
+                    if best_ask is not None and rp < best_ask:
+                        continue   # inside-spread → handled by Phase 2
+                    for mt in mts_for_product:
+                        if rq <= 0:
+                            break
+                        if mt.buy_quantity == 0:
+                            continue
+                        if mt.trade.price < rp:
+                            continue
+                        if mt.trade.price == rp and self.trade_matching_mode != TradeMatchingMode.all:
+                            continue
+                        vol = min(rq, mt.buy_quantity)
+                        if vol <= 0:
+                            continue
+                        mt.buy_quantity -= vol
+                        fill = self.__create_sell_order(order_ref, vol, rp, mt.trade.buyer)
+                        our_trades.append(fill)
+                        rq -= vol
+                    resting_sells[i] = (rp, rq, order_ref)
+
             # Record our fills
             if our_trades:
                 self.state.own_trades[product] = our_trades
