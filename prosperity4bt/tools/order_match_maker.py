@@ -29,6 +29,9 @@ TAKER_PARAMS = {
     "ASH_COATED_OSMIUM": {"qty_range": (2, 10),
                            "extra_rate": 0.038,
                            "width_alpha": 0.0},     # R2-calibrated against round98 (submission 274128 data, 100% book match). ACO BT 1,004 vs website 1,026 (-2.2% err), total BT 8,407 vs website 8,412 (-0.1% err). width_alpha=0 = legacy behavior; uncalibrated for R4.
+    "HYDROGEL_PACK":      {"qty_range": (2, 6),
+                            "extra_rate": 0.0070,
+                            "width_alpha": 0.0},    # R3 day-2 1k qty distribution: min=2, max=6, mean=4 (311 trades, 1244 vol). extra_rate=0.0070 user-provided (2026-04-25). Uncalibrated against website fills — pending backtester-fidelity sweep.
 }
 
 
