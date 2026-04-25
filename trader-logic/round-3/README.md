@@ -30,10 +30,12 @@ Previous submissions:
 
 ## Files (Active)
 
-- **`r3_v9.py`** — **CURRENT SUBMISSION**. v7 + safe BS voucher taking (BS_EDGE=10, adaptive sigma via rolling IV median). 10k 3-day $47k, 1k-tick day 2 $2,660. Day 0 1k-tick $4k (vs v7 $1k).
-- `r3_v7.py` — Previous best. Wall Mid for VFE (P3-winner technique). 10k 3-day $47k, 1k-tick day 2 $2.5k.
-- `r3_v3.py` — v1 + structural arb scanner (insurance, never fires in BT). $28k 3-day. Submitted as 383883 → website $1,177.
-- `r3_v1.py` — Original baseline pure MM + intrinsic arb 4000/4500. $28k 3-day.
+- **`r3_v11.py`** — **CURRENT SUBMISSION**. 402045's spread=17 GIGA SHORT HP + v9's voucher/VFE. **1k-tick day 2 $12,262** (4.6× v9). Estimated website $12,140 → top 7-10%.
+- `r3_v10.py` — 401389 HP day-type + v9 vouchers. 1k-tick day 2 $5,142.
+- `r3_v9.py` — v7 + safe BS voucher taking. Submitted as 401608 → website $2,636.
+- `r3_v7.py` — Wall Mid for VFE breakthrough. 10k 3-day $47k.
+- `r3_v3.py` — v1 + structural arb. Submitted as 383883 → website $1,177.
+- `r3_v1.py` — Original baseline pure MM. $28k 3-day.
 
 ## Archive (`archive/`)
 

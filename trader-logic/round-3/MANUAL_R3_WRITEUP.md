@@ -46,31 +46,83 @@ EV per counterparty at various realized `mu`:
 | `(770, 871)` — Safe high | 79.00 | 79.00 | 79.00 | 79.00 | 79.00 | 79.00 | 69.80 |
 | `(751, 836)` — Nash(836) | 84.33 | 72.54 | 69.31 | 66.54 | 64.19 | 62.24 | 59.36 |
 
-## Recommendation
+## Three-agent synthesis (2026-04-25)
 
-**Primary pick: `(b1 = 766, b2 = 866)`**
+After exhaustive analysis by quant-finance (game theory), competitive-programming (exhaustive search), and ml-research (behavioral posterior) specialists, the converged answer is below. Worker artifacts at `manual_r3_deep.py`, `manual_exhaustive/`, and the leaderboard mining results.
 
-Reasoning:
-1. **Flat EV across the likely `mu` range**: 81.57 whenever `mu <= 865`, drops only at `mu >= 870`.
-2. **Dominates UI default for `mu >= 860`**: competitors who herd on `(761, 856)` push `mu` upward via their own overbidding; `(766, 866)` sidesteps this.
-3. **Better than Nash(850) for `mu >= 855`**: `(756, 851)` takes penalty hits as `mu` drifts above 851, dropping to 67 at `mu=870`. `(766, 866)` stays above 77.
-4. **Better than safe-high `(770, 871)`** when `mu <= 865` (+2.57) with only a small cost when `mu = 870` (-1.80).
+### Posterior on `avg_b2` (the endogenous mean)
 
-**Alternate pick: `(770, 871)`** — for maximum risk-aversion. EV flat at 79 up to `mu=870`. Trades ~2.5 EV for robustness against a high-coordinating player pool.
-
-**Do NOT pick** `(751, 836)` — highest EV only if `mu <= 836`, otherwise falls off a cliff.
-
-## Why the UI Default `(761, 856)` Isn't Our Top Pick
-
-- Penalty factor at `b2 = 856` equals `((920-mu)/(920-856))^3`. When `mu = 856` exactly, factor = 1 (no effective penalty — EV = 83.08).
-- But if *any* non-trivial fraction of the player pool overbids (e.g., risk-averse competitors picking 866+), `mu` exceeds 856 and penalty bites. EV drops to 79 at `mu=860`, 74 at `mu=865`.
-- The asymmetric risk (sharp convex penalty below `mu`, flat profit above) argues for bidding slightly above consensus.
-
-## Submission
+Empirical-Bayesian posterior built from R1+R2 leaderboards (44k team-rows, 4,021 R3-eligible) plus a 14-bucket behavioral model:
 
 ```
-Lowest Bid:  766
-Highest Bid: 866
+P(avg_b2) = 0.80 · N(858.94, 4.0)   "base"
+          + 0.15 · N(866.0, 4.0)    "Discord-focal at 866 goes viral"
+          + 0.05 · N(871.0, 4.0)    "Discord-focal at 871 goes viral"
 ```
 
-Can be re-submitted until round end. If new information emerges about competitor behavior (leaderboard hints, IMC patches), update via solver.
+Mixture mean = **860.6**, SD = **5.5**, 95% CI ≈ [851, 870]. The 200k gate filtered out the bottom 82% of R1 entrants — surviving field is sophisticated, but bucket-fraction uncertainty (Dirichlet α=10) gives σ ≈ 4 even with N=4,021 averaging.
+
+### Per-μ structure (key finding)
+
+EV is **piecewise constant** with sharp jumps at each reserve crossing:
+- For `b2 > μ` (no penalty): `EV = (1/51)·[N1·(920−b1) + N2·(920−b2)]` — depends only on N1/N2 partitioning of 51 reserves.
+- For `b2 ≤ μ` (penalty): convex `(920−μ)³/(920−b2)²` term, dominated by no-penalty branch in expectation.
+- **Each +5 to b2 sacrifices ~1.0 EV/cp but extends the flat region by 5.**
+- **Each +0.01 to b1 (just past a reserve) captures +1.96 EV** if it crosses a reserve.
+
+### EV decision matrix under realistic posterior (σ≈4 mixture)
+
+| Pair | E[EV] | Best-case | Worst-case (95%) | P(cliff) | Type |
+|---|---:|---:|---:|---:|---|
+| `(760.01, 860.01)` | ~78.5 | 83.14 | 65 | **~39%** | Aggressive — too cliff-exposed |
+| `(761, 861)` integer | ~79.5 | 82.37 | 70 | ~32% | Tight-prior optimum |
+| **`(765.01, 865.01)`** | **~81.5** | **82.35** | 73 | ~12% | **Best fractional + safety** |
+| **`(766, 866)`** | **80.99** | **81.57** | 77.20 | ~9% | **Best integer (3-agent consensus)** |
+| `(771, 871)` | 80.45 | 80.57 | 80.57 | ~2% | Pareto-immune flat |
+| `(771, 876)` | 79.46 | 79.47 | 79.47 | <1% | Over-cushioned |
+
+### Recommendation (decision tree)
+
+**Primary submission depends on whether the UI accepts non-integer bids:**
+
+```
+Does the UI accept fractional bids (e.g., 765.01)?
+├── YES → Submit (b1, b2) = (765.01, 865.01)
+│         E[EV] ≈ 82.35 in ~93% of posterior, ~81.5 expected
+│         +0.5 EV/cp over (766, 866) ≈ +$500 on N=1000
+│         +0.78 EV/cp in 70% modal scenario
+│
+└── NO  → Submit (b1, b2) = (766, 866)
+          E[EV] ≈ 80.99 expected, 81.57 in flat zone
+          Robust to ±50% bucket misspecification
+          Wins under quant-finance meta + ml posterior + bimodal stress
+```
+
+R2 leaderboard had non-integer entries (34.01, 42.1, 61.1) — likely the form accepts fractionals, but verify before round close.
+
+### Why each alternative loses
+
+- **(760.01, 860.01)**: peak EV 83.14 but 39% cliff probability under realistic σ=4. Expected drops to ~78.5.
+- **(761, 861) integer**: same — wins +0.80 if μ≤861, loses ~6 EV if μ ∈ [862, 870] (32% mass).
+- **(771, 871)**: only beats (766, 866) if μ > 866.9. P(μ > 866.9) ≈ 23%. Expected loss vs (766, 866) ≈ $0.54/cp. Insurance not worth it.
+- **(776, 881) "minimax"**: pays $2.81/cp for tail prob ~5%. Bad Kelly trade.
+- **`(751, 836)` Nash(836)**: collapses at μ > 840.
+
+### Two non-obvious findings
+
+1. **Penalty-branch lever**: bidding `b2 = μ−1` gives slightly *higher* payoff than `b2 = μ+1` because `(920−μ)³/(920−b2)² > (920−μ)`. But under σ=4 you can't bet on it — explains why `(761, 856)` "almost works" as a deliberate penalty-side bid.
+
+2. **Fractional-bid kink**: EV jumps by ~+1.96 every time b1 crosses a reserve from above. So `b1 = 765.01` (just past the 765 reserve) captures all 20 below-reserves at the high price. This is the entire +0.78 fractional advantage over (766, 866).
+
+### Validation: 289-team R2 cluster
+
+The ml-research agent found **289 R2 teams played `(23, 77, 0)` exactly** — the strongest single piece of evidence for an "extreme rank-interpretation" bucket. R3 analog: ~5-7% of survivors play conservative-low b2 (≤836). Consistent with bucket model.
+
+### Submission
+
+```
+PRIMARY (if fractional accepted):  Lowest Bid: 765.01,  Highest Bid: 865.01
+FALLBACK (integer only):           Lowest Bid: 766,      Highest Bid: 866
+```
+
+Test the UI form for fractional acceptance before round close. If the form silently rounds, both reduce to (766, 866). Do NOT enter (765, 865) as fallback — that fails to capture the 765 reserve. Re-submittable until round end.
