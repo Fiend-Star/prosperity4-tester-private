@@ -28,15 +28,21 @@ Previous submissions:
 
 **Key calibration decision:** Pure mid (NOT microprice) for fair value. Microprice volatility on tight-spread products (VE spread=5) caused spurious crossing takes. Switching to mid: +$8.3k on 3-day BT.
 
-## Files
+## Files (Active)
 
-- `r3_v1.py` — **PROVEN BASELINE** (+28,013 BT). Pure MM + intrinsic arb on 4000/4500, no Black-Scholes.
-- `r3_v3.py` — **v3 SUBMISSION CANDIDATE**. v1 + strict intrinsic arb on all 10 strikes + call-spread arb scanner on all 45 pairs + vol-scaled HYDROGEL_PACK MM. **Identical BT PnL to v1** (arbs don't fire on BT data — insurance for live).
-- `r3_v3_theta.py` — A/B variant with terminal theta harvest. No effect in BT (may help on website if round-end liquidation uses intrinsic/BS-theoretical).
-- `r3_v4.py` — v3 + EDA-driven attempts (OBI predictor, size scale-up). All disabled — both add no value or destroyed PnL. Final architecture identical to v3 (+28k BT).
-- `r3_v5.py` — v3 + VR(20) directional via VEV_4000. Tested both mean-reversion (-$40k/day 1k-tick) and trend-follow (-$44k/day). Both fail because spread=$20 ≫ signal value. Directional disabled; v5 = v3 effectively.
-- `r3_v6.py` — Aggressive MM test (TAKE_OFFSET=1, no pos-aggression). Lost -$80k 3-day. Top traders are NOT just being more aggressive.
-- **`r3_v7.py`** — **CURRENT SUBMISSION**. Wall Mid for VELVETFRUIT_EXTRACT (P3-winner technique from playbook §4). Plain mid for HYDROGEL_PACK (Wall Mid hurt on 1k-tick window). IV smile disabled (-$500 net). 3-day +$47k.
+- **`r3_v9.py`** — **CURRENT SUBMISSION**. v7 + safe BS voucher taking (BS_EDGE=10, adaptive sigma via rolling IV median). 10k 3-day $47k, 1k-tick day 2 $2,660. Day 0 1k-tick $4k (vs v7 $1k).
+- `r3_v7.py` — Previous best. Wall Mid for VFE (P3-winner technique). 10k 3-day $47k, 1k-tick day 2 $2.5k.
+- `r3_v3.py` — v1 + structural arb scanner (insurance, never fires in BT). $28k 3-day. Submitted as 383883 → website $1,177.
+- `r3_v1.py` — Original baseline pure MM + intrinsic arb 4000/4500. $28k 3-day.
+
+## Archive (`archive/`)
+
+Iteration history moved to subfolders for cleanliness:
+- `archive/v1_iterations/` — v1a-v1e (microprice/inventory-skew/slack experiments)
+- `archive/failed_experiments/` — v2, v2b, v4, v5, v6, v8 (lost money in BT)
+- `archive/superseded/` — v3_theta (no effect)
+
+See `archive/README.md` for details on each.
 - `r3_v8.py` — v7 + BS voucher MM (fixed sigma=0.20, edge=1.6 ticks) + delta hedge. Inspired by competitor 392245.py. Day 0 1k-tick +$7k (huge gain) but DAY 2 10K -$14k (catastrophic). 3-day total $4.5k. **NOT SUBMITTED**. Same vol-regime fragility as competitor.
 
 ## v8 Lesson: Fixed-sigma BS voucher MM fails (2026-04-25)
