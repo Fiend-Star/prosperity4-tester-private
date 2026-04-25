@@ -2,7 +2,7 @@ import sys
 from importlib import import_module, reload
 from pathlib import Path
 from typing import Any, Optional
-from prosperity4bt.tools.data_reader import BackDataReader, PackageResourcesReader
+from prosperity4bt.tools.data_reader import BackDataReader, FileSystemReader, PackageResourcesReader
 from prosperity4bt.models.output import BacktestResult
 from prosperity4bt.tools.output_file_writer import OutputFileWriter
 from prosperity4bt.tools.result_merger import ResultMerger
@@ -61,10 +61,8 @@ class BackTester:
 
     def __get_data_reader(self, data_dir: Optional[Path]) -> BackDataReader:
         if data_dir is not None:
-            # return FileSystemReader(data_root)
-            return None
-        else:
-            return PackageResourcesReader()
+            return FileSystemReader(data_dir)
+        return PackageResourcesReader()
 
 
     def __run_test(self, trader_module, data_reader: BackDataReader, round: int, day: int) -> BacktestResult:

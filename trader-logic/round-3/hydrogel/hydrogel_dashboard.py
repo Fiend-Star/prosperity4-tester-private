@@ -233,11 +233,18 @@ def discover_reports(root_str: str, product: str) -> List[ReportInfo]:
         if p.name == f"enriched_{product}.csv":
             candidates.append(p.parent)
 
-    # Deduplicate while preserving sorted order.
-    unique = sorted(set(candidates), key=lambda p: natural_day_label(p)[1])
+    # Deduplicate while preserving sorted order. Multiple runs for the same calendar day
+    # (e.g. full backtest CSV vs a website activities export) need distinct labels and
+    # `day_sort` keys or Streamlit's multiselect and stitched plots conflate them.
+    unique = sorted(
+        set(candidates),
+        key=lambda p: (natural_day_label(p)[1], natural_day_label(p)[0], str(p)),
+    )
     reports: List[ReportInfo] = []
-    for p in unique:
-        label, day_sort = natural_day_label(p)
+    for i, p in enumerate(unique):
+        base_label, base_sort = natural_day_label(p)
+        label = f"{base_label} — {p.name}"
+        day_sort = base_sort * 1_000 + i
         reports.append(ReportInfo(label=label, day_sort=day_sort, path=str(p), product=product))
     return reports
 
@@ -699,7 +706,21 @@ with tabs[4]:
     else:
         horizons = sorted(pd.to_numeric(sig["horizon"], errors="coerce").dropna().astype(int).unique().tolist()) if "horizon" in sig.columns else []
         h = st.selectbox("Horizon", horizons, index=0 if horizons else None)
-        min_n = st.number_input("Minimum sample size", min_value=0, max_value=int(sig.get("n", pd.Series([0])).max()) if "n" in sig else 1000000, value=1000, step=100)
+        if "n" in sig.columns:
+            _nmax = pd.to_numeric(sig["n"], errors="coerce").max()
+            max_n = int(_nmax) if pd.notna(_nmax) and _nmax >= 0 else 1_000_000
+        else:
+            max_n = 1_000_000
+        # Cap at 1000, align to step=100, and never exceed max_n
+        _want = min(1000, max_n)
+        default_min_n = (_want // 100) * 100
+        min_n = st.number_input(
+            "Minimum sample size",
+            min_value=0,
+            max_value=max_n,
+            value=default_min_n,
+            step=100,
+        )
         search = st.text_input("Feature name contains", value="")
 
         filt = sig.copy()
