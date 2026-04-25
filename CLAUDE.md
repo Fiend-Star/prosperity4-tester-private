@@ -8,25 +8,28 @@ Guidance for Claude Code working with this repository. Detailed submission histo
 # Set PYTHONPATH if you get "No module named 'datamodel'"
 $env:PYTHONPATH="c:\Users\gurms\PycharmProjects\imc-prosperity-4-backtester\prosperity4bt"
 
-# Current best (Round 1)
+# Current best R3 — sub 402350 → $12,246 website
+python -m prosperity4bt trader-logic/round-3/r3_v11.py 3
+
+# 1k-tick day 2 BT (matches website test exactly — verified BT×0.99=website)
+python -m prosperity4bt trader-logic/round-3/r3_v11.py 3-2 --ticks 1000 --no-out --no-progress
+
+# Full 10k 3-day BT
+python -m prosperity4bt trader-logic/round-3/r3_v11.py 3 --ticks 10000
+
+# Earlier rounds best
 python -m prosperity4bt trader-logic/round-1/r1_v4.py 1
 
-# Tutorial (1k ticks R1, 2k ticks R0 — run() every tick like website)
-python -m prosperity4bt trader-logic/round-1/r1_v4.py 1 --ticks 1000
-python -m prosperity4bt trader-logic/round-0/trader.py 0 --ticks 2000
-
-# Full-day scoring (10k ticks)
-python -m prosperity4bt trader-logic/round-1/r1_v4.py 1 --ticks 10000
-
 # Key flags
-#   --ticks N                          max ticks to simulate
+#   --ticks N                          max ticks to simulate (1000 = R3 website test, 10000 = full day)
 #   --iterations N                     run() called N times (usually match --ticks)
 #   --match-trades {all|worse|none}    trade matching mode (default: all)
-#   --match-mode {default|imc}         'imc' = R2-calibrated (round98, ACO ±1.0%); 'default' = CSV replay
+#   --match-mode {default|imc}         'imc' = R2-calibrated; for R3 use 'default'
 #   --no-out / --no-progress / --print
 ```
 
 Logs → `backtests/<timestamp>.log`. Full day = 10k ticks (timestamps 0–999,900, step 100ms).
+**R3 website test only runs 1k ticks of day 2** (timestamps 0–99,900). See `trader-logic/round-3/BACKTEST_COMMANDS.md`.
 
 ## Game Engine Tick Sequence (from chrispyroberts/imc-prosperity-4 Rust source)
 
@@ -211,6 +214,63 @@ Full 25+ submission trajectory, 40 lessons, and defensive-stack analysis (v9–v
 ### Round 1 Manual Challenge: "An Intarian Welcome"
 
 Uniform-price clearing auction (new P4 format). Optimal orders: **Flax BUY@30 vol 9,999** (clearing 29, +9,999) + **Mushroom BUY@17 vol 19,999** (clearing 16, +77,996) = **87,995 XIRECs**. Solver at `trader-logic/auction_solver.py`, writeup in `trader-logic/auction_writeup.md`. Full derivation in [`memory/project_manual_challenge_r1.md`](memory/project_manual_challenge_r1.md).
+
+## Round 3: "Gloves Off" (SHIPPED)
+
+12 products: HYDROGEL_PACK (200), VELVETFRUIT_EXTRACT (200, also UNDERLYING), 10 VEV_K vouchers (calls on VFE, K=4000-6500, limit 300 each).
+
+**Final submission `r3_v11.py` (sub 402350)**: **$12,246 website** (top ~10%, was #615 at $1,177).
+**Manual**: (b1=766, b2=866) two-bid auction. Robust Nash optimum.
+
+### Critical R3 Discoveries
+
+1. **Website tests 1k ticks of day 2 only** (timestamps 0-99,900 step 100). Verified universal across 1506 leaderboard submissions. Our BT defaults to 10k — use `--ticks 1000` for parity.
+2. **BT × 0.99 ≈ website** for 1k-tick day 2 (verified twice: v9 $2,660→$2,636, v11 $12,262→$12,246).
+3. **stdout NOT captured** by IMC sandbox. `print()` thrown away. Use `state.traderData` (50KB cap) for diagnostics.
+4. **All-or-nothing position limits per product**: if `pos+total_buy > LIMIT` OR `pos-total_sell < -LIMIT`, ALL orders for that product rejected.
+5. **Cross-backtester verification**: identical PnL across our Python BT, Xeeshan85's prosperity4btx, GeyzsoN's rust_backtester.
+
+### v11 Architecture
+- **HYDROGEL_PACK**: spread==17 GIGA SHORT (Discord competitor 402045): when spread widens to 17 AND mid > 10010, short 200 contracts, exit at mid<9998. Day 2 1k-tick = $10,224.
+- **VELVETFRUIT_EXTRACT**: Wall Mid MM (P3-winner technique): fair value = midpoint of HIGHEST-VOLUME bid/ask levels (not best±). Day 2 1k-tick = $1,940.
+- **Vouchers**: BS taking with wide edge (BS_EDGE=10) + adaptive sigma (rolling IV median window=50) + intrinsic arb on 4000/4500 + call-spread arb scanner. Day 2 1k-tick = $98 net.
+
+### R3 Strategy Lessons (added to memory)
+1. **Wall Mid > simple mid** — every 2nd-place P1/P2/P3 team used Wall Mid. +$19k 3-day on R3 VFE alone.
+2. **spread=17 stress signal** is real on R3 HP (mean reverts to 9990).
+3. **IV smile z-score fails** at typical timescales (half-life 1-30 ticks, not 100-200).
+4. **OBI alpha is real but spread-dominated** (β=0.30 t=8-11 R²=1% but spread=20 ≫ signal).
+5. **Aggressive take loses** — TAKE_OFFSET=1 on HP cost -$80k 3-day from adverse selection on MM bot quotes.
+6. **Fixed-sigma BS voucher MM is fragile** to vol regime shifts (v8/competitor 392245). Adaptive sigma + wide edge survives.
+7. **Hardcoded TARGET inventory arrays** (DP on day 2 historical path) score $90-154k but fragile to data shifts. Lachydauth confirmed his $90k was a "hardcoded joke". Signal-based v11 ($12k) is more robust.
+8. **Never push past v9-baseline 10k 3-day** ($47k) — v10/v11 traded full-day stability for 1k-tick alpha.
+
+### Round 3 File Organization
+```
+trader-logic/round-3/
+├── r3_v1, v3, v7, v9, v10, v11.py        # Active (chronological)
+├── archive/{v1_iterations, failed_experiments, superseded}/
+├── manual_r3_solver.py                    # Nash + grid search
+├── notes/
+│   ├── voucher_analysis.py + output.txt   # 8-part EDA
+│   ├── iv_visualization.py + iv_plots/    # 4 PNG plots
+│   ├── recalibration_1k.md
+│   └── alpha_hunt.py + output.txt
+├── intel/
+│   ├── image.png                          # Top-trader $80k chart screenshot
+│   └── competitor_strategies/
+│       ├── 392245.py (HP day-type detection)
+│       ├── 401389.py (HP day-type detection v7)
+│       ├── 401608.py (= our r3_v9)
+│       ├── 402045.py (★ spread=17 GIGA SHORT)
+│       └── 400463.py (BS voucher fragile)
+├── oracle/god_logger_r3.py                # Pristine market state logger
+├── R3_BRIEF.md                            # Official wiki brief
+├── R3_EXPLAINED.md                        # Round explanation
+├── BACKTEST_COMMANDS.md                   # ★ Team reference
+├── MANUAL_R3_WRITEUP.md                   # Two-bid auction analysis
+└── README.md                              # Active state + history
+```
 
 ## Round 1 File Organization
 
