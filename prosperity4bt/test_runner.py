@@ -130,9 +130,16 @@ class TestRunner:
 
         state.timestamp = timestamp
 
-        # Clear previous tick's trades — wiki: "trades since last iteration"
-        state.own_trades = {}
-        state.market_trades = {}
+        # Preserve previous tick's own_trades and market_trades — IMC live engine passes
+        # "trades since last iteration", which means trades from the just-completed tick
+        # are visible to the next trader.run() call. Previously these were cleared here,
+        # breaking counterparty-aware strategies. Trades from this tick will be added
+        # by __match_orders after trader.run() executes.
+        # (If state has no prior trades dict, initialize empty.)
+        if not hasattr(state, "own_trades") or state.own_trades is None:
+            state.own_trades = {}
+        if not hasattr(state, "market_trades") or state.market_trades is None:
+            state.market_trades = {}
 
         for product in data.products:
             order_depth = OrderDepth()
@@ -254,6 +261,10 @@ class TestRunner:
 
 
     def __match_orders(self, state: TradingState, data: BacktestData, orders: dict[Symbol, list[Order]], result: BacktestResult) -> None:
+        # Trader has finished consuming previous tick's trades; clear before this
+        # tick's matching so state reflects only "since last iteration" trades.
+        state.own_trades = {}
+        state.market_trades = {}
         match_maker = OrderMatchMaker(state, data, orders, self.trade_matching_mode, self.match_mode)
         matched_trades = match_maker.match()
         result.trades.extend(matched_trades)
