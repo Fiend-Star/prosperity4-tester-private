@@ -1,6 +1,10 @@
 # R4 Manual Challenge — Aether Crystal Options
 
-## TL;DR — orders to enter
+> **⚠ SUPERSEDED — see [MANUAL_R4_FINAL.md](MANUAL_R4_FINAL.md) for the current 5-position DROP_60C ship recommendation.**
+>
+> This file documents the original 6-position max-EV analysis. After 5-agent verification + 64-subset linearity proof, the AC_60_C SELL was identified as variance pollution (+$0.41 EV but 70% of total portfolio variance) and dropped. Final ship = 5 positions, $165,721 expected with ×3000 multiplier.
+
+## TL;DR — orders to enter (ORIGINAL — 6 positions)
 
 | # | Action | Instrument | Volume | Price | Per-unit edge | EV |
 |---|--------|------------|-------:|------:|--------------:|----:|
