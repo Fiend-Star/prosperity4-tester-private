@@ -1,4 +1,4 @@
-"""r3_v35.py — v34 architecture with yolo.py as the active fallback.
+"""r3_v36_ifvg_hp_c60_force_t900.py - v35+IFVG[60t candles] — v34 architecture with yolo.py as the active fallback.
 
 FALLBACK = YoloFallback() (v22 fallback class kept in file for swap-back).
 Inherits v34's per-product drift guard + named THRESH configs.
@@ -347,14 +347,10 @@ def _yolo_order_to_target(symbol, pos, target, bid, ask):
 
 class YoloHydrogelParams:
     # ========================= ALPHA hardcodes =========================
-    # Hypothesis: spread=17 marks local peaks worth shorting.
     REGIME2_SPREAD = 17
-    # Hypothesis: require elevated absolute price to avoid weak spread=17 events.
     ENTRY_MID_MIN = 10010
-    # Hypothesis: spread=7 + rolling low-quantile marks bottoming regime.
     S7_WINDOW = 500
     S7_BOTTOM_Q = 0.08
-    # Hypothesis: after S7 bottom, target long inventory for rebound capture.
     FLIP_TARGET = 200
     # Improved flip-hold exits (same as 461583):
     # - fixed mid target
@@ -367,15 +363,11 @@ class YoloHydrogelParams:
     # Keep 10010 as anchor; if stale, switch entry gate to ma500 + offset.
     STALE_GATE_TICKS = 500
     STALE_GATE_OFFSET = 25
-    # Hypothesis: price > ma200 + 25 marks a rare extension (~p97) worth fading.
     # 25 is structural -- approx 5x normal spread width, not a vol-derived number.
     # Tested: std-based derivation fails because it under-fires by 3-5x vs fixed.
     TR_ENTRY_OFFSET = 25
-    # Hypothesis: price back within ma200 + 8 means extension has normalized.
     TR_EXIT_OFFSET = 8
-    # Hypothesis: price < ma200 - 25 marks rare downside extension worth buying.
     MR_ENTRY_OFFSET = 25
-    # Hypothesis: price back within ma200 - 8 means downside extension normalized.
     MR_EXIT_OFFSET = 8
 
     # ==================== INTRINSIC / structure ========================
@@ -433,6 +425,14 @@ class YoloHydrogelState:
         self.edge_buf: List[float] = []
         self.ret_buf: List[float] = []
         self.last_10010_hit_row: Optional[int] = None
+        self.fci: int = -1
+        self.fch: float = -1e9
+        self.fcl: float = 1e9
+        self.f1h: float = 0.0; self.f1l: float = 0.0
+        self.f2h: float = 0.0; self.f2l: float = 0.0
+        self.f3h: float = 0.0; self.f3l: float = 0.0
+        self.fh3: bool = False
+        self.fpa: int = 0; self.fer: int = 0
 
     def to_dict(self):
         return {
@@ -457,6 +457,10 @@ class YoloHydrogelState:
             "edgeb":     [round(x, 4) for x in self.edge_buf],
             "retb":      [round(x, 2) for x in self.ret_buf],
             "h10010":    self.last_10010_hit_row,
+            "fci": self.fci, "fch": self.fch, "fcl": self.fcl,
+            "f1h": self.f1h, "f1l": self.f1l, "f2h": self.f2h, "f2l": self.f2l,
+            "f3h": self.f3h, "f3l": self.f3l, "fh3": self.fh3,
+            "fpa": self.fpa, "fer": self.fer,
         }
 
     @staticmethod
@@ -483,6 +487,12 @@ class YoloHydrogelState:
         s.edge_buf          = d.get("edgeb", [])
         s.ret_buf           = d.get("retb", [])
         s.last_10010_hit_row = d.get("h10010")
+        s.fci = d.get("fci", -1)
+        s.fch = d.get("fch", -1e9); s.fcl = d.get("fcl", 1e9)
+        s.f1h = d.get("f1h", 0.0); s.f1l = d.get("f1l", 0.0)
+        s.f2h = d.get("f2h", 0.0); s.f2l = d.get("f2l", 0.0)
+        s.f3h = d.get("f3h", 0.0); s.f3l = d.get("f3l", 0.0)
+        s.fh3 = d.get("fh3", False); s.fpa = d.get("fpa", 0); s.fer = d.get("fer", 0)
         return s
 
 
@@ -699,6 +709,44 @@ def run_yolo_hydrogel(state, hstate):
                     f"mid={mid:.1f} ma200={ma200:.1f} dev={ma200 - mid:.1f}"
                 )
 
+    cidx = hstate.row // 60
+    if cidx != hstate.fci:
+        if hstate.fci >= 0 and hstate.fch > -1e8:
+            hstate.f3h = hstate.f2h; hstate.f3l = hstate.f2l
+            hstate.f2h = hstate.f1h; hstate.f2l = hstate.f1l
+            hstate.f1h = hstate.fch; hstate.f1l = hstate.fcl
+            if hstate.f3h > 0.0: hstate.fh3 = True
+        hstate.fci = cidx; hstate.fch = mid; hstate.fcl = mid
+    else:
+        if mid > hstate.fch: hstate.fch = mid
+        if mid < hstate.fcl: hstate.fcl = mid
+    if hstate.fh3:
+        if hstate.fpa != 0:
+            held = hstate.row - hstate.fer
+            xt = held >= 200 or (hstate.fpa < 0 and mid >= hstate.f1l) or (hstate.fpa > 0 and mid <= hstate.f1h)
+            if xt and position != 0:
+                if position > 0:
+                    q = min(position, 25, pos_lim + position - dir_sell_committed)
+                    if q > 0: orders.append(Order(P, best_bid, -q)); dir_sell_committed += q
+                elif position < 0:
+                    q = min(-position, 25, pos_lim - position - dir_buy_committed)
+                    if q > 0: orders.append(Order(P, best_ask, q)); dir_buy_committed += q
+            if xt: hstate.fpa = 0
+        else:
+            if hstate.f3h < hstate.f1l and mid < hstate.f3h:
+                tgt = -50
+                if position > tgt and not hstate.tr_short_active and not hstate.mr_long_active:
+                    q = min(25, position - tgt, pos_lim + position - dir_sell_committed)
+                    if q > 0:
+                        orders.append(Order(P, best_bid, -q)); dir_sell_committed += q
+                        hstate.fpa = -1; hstate.fer = hstate.row
+            elif hstate.f3l > hstate.f1h and mid > hstate.f3l:
+                tgt = 50
+                if position < tgt and not hstate.tr_short_active and not hstate.mr_long_active:
+                    q = min(25, tgt - position, pos_lim - position - dir_buy_committed)
+                    if q > 0:
+                        orders.append(Order(P, best_ask, q)); dir_buy_committed += q
+                        hstate.fpa = 1; hstate.fer = hstate.row
     # Layer 4 passive MM: suppress tight-spread quoting.
     if spread < p.MIN_MM_SPREAD:
         return orders, hstate
@@ -1087,6 +1135,9 @@ class Trader:
 
         # DP only runs in the first DP_TICK_LIMIT ticks; past that, force LIVE.
         if mode == "DP" and tick_num >= DP_TICK_LIMIT:
+            mode = "LIVE"
+
+        if mode == "DP" and tick_num >= 900:
             mode = "LIVE"
 
         # Per-tick drift watchdog inside the DP window: 3 consec misses -> abort.

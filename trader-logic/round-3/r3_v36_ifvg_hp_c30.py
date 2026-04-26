@@ -1,4 +1,4 @@
-"""r3_v35.py — v34 architecture with yolo.py as the active fallback.
+"""r3_v36_ifvg_hp_c30.py — v35 + IFVG overlay (CANDLE_SIZE=30).  — v34 architecture with yolo.py as the active fallback.
 
 FALLBACK = YoloFallback() (v22 fallback class kept in file for swap-back).
 Inherits v34's per-product drift guard + named THRESH configs.
@@ -433,6 +433,19 @@ class YoloHydrogelState:
         self.edge_buf: List[float] = []
         self.ret_buf: List[float] = []
         self.last_10010_hit_row: Optional[int] = None
+        # IFVG (Inverse Fair Value Gap) overlay state.
+        self.fvg_candle_idx: int = -1
+        self.fvg_cur_high: float = -1e9
+        self.fvg_cur_low: float = 1e9
+        self.fvg_c1_high: float = 0.0   # 1 candle ago, closed
+        self.fvg_c1_low: float = 0.0
+        self.fvg_c2_high: float = 0.0   # 2 candles ago, closed
+        self.fvg_c2_low: float = 0.0
+        self.fvg_c3_high: float = 0.0   # 3 candles ago, closed
+        self.fvg_c3_low: float = 0.0
+        self.fvg_have_3: bool = False
+        self.fvg_pos_active: int = 0    # +1 long, -1 short, 0 flat
+        self.fvg_entry_row: int = 0
 
     def to_dict(self):
         return {
@@ -457,6 +470,18 @@ class YoloHydrogelState:
             "edgeb":     [round(x, 4) for x in self.edge_buf],
             "retb":      [round(x, 2) for x in self.ret_buf],
             "h10010":    self.last_10010_hit_row,
+            "fci":   self.fvg_candle_idx,
+            "fch":   self.fvg_cur_high,
+            "fcl":   self.fvg_cur_low,
+            "f1h":   self.fvg_c1_high,
+            "f1l":   self.fvg_c1_low,
+            "f2h":   self.fvg_c2_high,
+            "f2l":   self.fvg_c2_low,
+            "f3h":   self.fvg_c3_high,
+            "f3l":   self.fvg_c3_low,
+            "fh3":   self.fvg_have_3,
+            "fpa":   self.fvg_pos_active,
+            "fer":   self.fvg_entry_row,
         }
 
     @staticmethod
@@ -483,6 +508,18 @@ class YoloHydrogelState:
         s.edge_buf          = d.get("edgeb", [])
         s.ret_buf           = d.get("retb", [])
         s.last_10010_hit_row = d.get("h10010")
+        s.fvg_candle_idx     = d.get("fci", -1)
+        s.fvg_cur_high       = d.get("fch", -1e9)
+        s.fvg_cur_low        = d.get("fcl", 1e9)
+        s.fvg_c1_high        = d.get("f1h", 0.0)
+        s.fvg_c1_low         = d.get("f1l", 0.0)
+        s.fvg_c2_high        = d.get("f2h", 0.0)
+        s.fvg_c2_low         = d.get("f2l", 0.0)
+        s.fvg_c3_high        = d.get("f3h", 0.0)
+        s.fvg_c3_low         = d.get("f3l", 0.0)
+        s.fvg_have_3         = d.get("fh3", False)
+        s.fvg_pos_active     = d.get("fpa", 0)
+        s.fvg_entry_row      = d.get("fer", 0)
         return s
 
 
@@ -698,6 +735,80 @@ def run_yolo_hydrogel(state, hstate):
                     f"MR LONG ENTER: qty={buy_qty} px={best_ask} "
                     f"mid={mid:.1f} ma200={ma200:.1f} dev={ma200 - mid:.1f}"
                 )
+
+    # ===== IFVG (Inverse Fair Value Gap) overlay [CANDLE_SIZE=30] =====
+    fvg_candle_idx_now = hstate.row // 30
+    if fvg_candle_idx_now != hstate.fvg_candle_idx:
+        # Close previous candle, shift history (only if we had a real candle).
+        if hstate.fvg_candle_idx >= 0 and hstate.fvg_cur_high > -1e8:
+            hstate.fvg_c3_high = hstate.fvg_c2_high
+            hstate.fvg_c3_low  = hstate.fvg_c2_low
+            hstate.fvg_c2_high = hstate.fvg_c1_high
+            hstate.fvg_c2_low  = hstate.fvg_c1_low
+            hstate.fvg_c1_high = hstate.fvg_cur_high
+            hstate.fvg_c1_low  = hstate.fvg_cur_low
+            if hstate.fvg_c3_high > 0.0:
+                hstate.fvg_have_3 = True
+        hstate.fvg_candle_idx = fvg_candle_idx_now
+        hstate.fvg_cur_high = mid
+        hstate.fvg_cur_low  = mid
+    else:
+        if mid > hstate.fvg_cur_high: hstate.fvg_cur_high = mid
+        if mid < hstate.fvg_cur_low:  hstate.fvg_cur_low  = mid
+
+    if hstate.fvg_have_3:
+        IFVG_MAX_POS = 50
+        IFVG_TIMEOUT = 200
+        IFVG_SIZE    = 25
+        # Exit conditions for active IFVG position.
+        if hstate.fvg_pos_active != 0:
+            held = hstate.row - hstate.fvg_entry_row
+            should_exit = held >= IFVG_TIMEOUT
+            if hstate.fvg_pos_active < 0 and mid >= hstate.fvg_c1_low:
+                should_exit = True
+            if hstate.fvg_pos_active > 0 and mid <= hstate.fvg_c1_high:
+                should_exit = True
+            if should_exit and position != 0:
+                if position > 0:
+                    qty = min(position, IFVG_SIZE, pos_lim + position - dir_sell_committed)
+                    if qty > 0:
+                        orders.append(Order(P, best_bid, -qty))
+                        dir_sell_committed += qty
+                        logger.print(f"IFVG EXIT long: qty={qty} mid={mid:.1f} held={held}")
+                elif position < 0:
+                    qty = min(-position, IFVG_SIZE, pos_lim - position - dir_buy_committed)
+                    if qty > 0:
+                        orders.append(Order(P, best_ask, qty))
+                        dir_buy_committed += qty
+                        logger.print(f"IFVG EXIT short: qty={qty} mid={mid:.1f} held={held}")
+            if should_exit:
+                hstate.fvg_pos_active = 0
+        else:
+            # Detect new IFVG invalidation signals.
+            bull_fvg = hstate.fvg_c3_high < hstate.fvg_c1_low   # 3-candle gap up
+            bear_fvg = hstate.fvg_c3_low  > hstate.fvg_c1_high  # 3-candle gap down
+            if bull_fvg and mid < hstate.fvg_c3_high:
+                # Bullish FVG invalidated -> SHORT
+                target_short = -IFVG_MAX_POS
+                if position > target_short and not hstate.tr_short_active and not hstate.mr_long_active:
+                    sell_qty = min(IFVG_SIZE, position - target_short, pos_lim + position - dir_sell_committed)
+                    if sell_qty > 0:
+                        orders.append(Order(P, best_bid, -sell_qty))
+                        dir_sell_committed += sell_qty
+                        hstate.fvg_pos_active = -1
+                        hstate.fvg_entry_row = hstate.row
+                        logger.print(f"IFVG SHORT: qty={sell_qty} mid={mid:.1f} c3h={hstate.fvg_c3_high:.1f} c1l={hstate.fvg_c1_low:.1f}")
+            elif bear_fvg and mid > hstate.fvg_c3_low:
+                # Bearish FVG invalidated -> LONG
+                target_long = IFVG_MAX_POS
+                if position < target_long and not hstate.tr_short_active and not hstate.mr_long_active:
+                    buy_qty = min(IFVG_SIZE, target_long - position, pos_lim - position - dir_buy_committed)
+                    if buy_qty > 0:
+                        orders.append(Order(P, best_ask, buy_qty))
+                        dir_buy_committed += buy_qty
+                        hstate.fvg_pos_active = 1
+                        hstate.fvg_entry_row = hstate.row
+                        logger.print(f"IFVG LONG: qty={buy_qty} mid={mid:.1f} c3l={hstate.fvg_c3_low:.1f} c1h={hstate.fvg_c1_high:.1f}")
 
     # Layer 4 passive MM: suppress tight-spread quoting.
     if spread < p.MIN_MM_SPREAD:
