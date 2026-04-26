@@ -22,11 +22,10 @@ Pluggable fallback (the point of this refactor):
   Trader.run owns the logger.flush; fallback is pure (state in, orders out).
 """
 from datamodel import Order, ProsperityEncoder, Symbol, TradingState
-from collections import deque
 import itertools
 import json
 import math
-from statistics import median
+from statistics import NormalDist, median
 from typing import Any, Dict, List, Optional, Tuple
 
 LIMITS = {
@@ -104,8 +103,7 @@ def get_target(prod, ts):
 
 
 # ===== v22 fallback (used when day-2 fingerprint fails) =====
-_SQRT_2 = 2 ** 0.5
-def _ncdf(x): return 0.5 * math.erfc(-x / _SQRT_2)
+_ND_VOUCHER = NormalDist()
 
 
 class Logger:
@@ -210,6 +208,10 @@ def _zscore(buf, value):
     if mu is None or sd is None or sd == 0: return None
     return (value - mu) / sd
 
+def _push(buf, value, maxlen):
+    buf = buf + [value]
+    return buf[-maxlen:] if len(buf) > maxlen else buf
+
 def _clip(value, lo, hi):
     return max(lo, min(hi, value))
 
@@ -247,8 +249,8 @@ def compute_book_features(order_depth):
 
 class HydrogelState:
     def __init__(self):
-        self.mid_buf_500: deque = deque(maxlen=HydrogelParams.Z500_WINDOW)
-        self.mid_buf_100: deque = deque(maxlen=HydrogelParams.STD100_WINDOW)
+        self.mid_buf_500: List[float] = []
+        self.mid_buf_100: List[float] = []
         self.row: int = 0
         self.s17_entry_row: Optional[int] = None
         self.s17_entry_mid: Optional[float] = None
@@ -259,8 +261,8 @@ class HydrogelState:
         # Online wap-edge calibration state for MM Layer-A skew.
         self.prev_mid: Optional[float] = None
         self.prev_wap_edge: Optional[float] = None
-        self.edge_buf: deque = deque(maxlen=HydrogelParams.EDGE_BETA_WINDOW)
-        self.ret_buf: deque = deque(maxlen=HydrogelParams.EDGE_BETA_WINDOW)
+        self.edge_buf: List[float] = []
+        self.ret_buf: List[float] = []
 
     def to_dict(self):
         # Mids are half-tick discrete so 2dp is loss-free; edge / ret values
@@ -284,8 +286,8 @@ class HydrogelState:
     @staticmethod
     def from_dict(d):
         s = HydrogelState()
-        s.mid_buf_500.extend(d.get("mid_buf_500", []))
-        s.mid_buf_100.extend(d.get("mid_buf_100", []))
+        s.mid_buf_500       = d.get("mid_buf_500", [])
+        s.mid_buf_100       = d.get("mid_buf_100", [])
         s.row               = d.get("row", 0)
         s.s17_entry_row     = d.get("s17_entry_row")
         s.s17_entry_mid     = d.get("s17_entry_mid")
@@ -294,8 +296,8 @@ class HydrogelState:
         s.flip_entry_row    = d.get("flip_entry_row")
         s.prev_mid          = d.get("prev_mid")
         s.prev_wap_edge     = d.get("prev_wap_edge")
-        s.edge_buf.extend(d.get("edge_buf", []))
-        s.ret_buf.extend(d.get("ret_buf", []))
+        s.edge_buf          = d.get("edge_buf", [])
+        s.ret_buf           = d.get("ret_buf", [])
         return s
 
 
@@ -321,15 +323,15 @@ def run_hydrogel(state, hstate):
     best_ask = int(features["best_ask"])
     wap_edge = features["book_wap_edge_L3"]
 
-    hstate.mid_buf_500.append(mid)
-    hstate.mid_buf_100.append(mid)
+    hstate.mid_buf_500 = _push(hstate.mid_buf_500, mid, p.Z500_WINDOW)
+    hstate.mid_buf_100 = _push(hstate.mid_buf_100, mid, p.STD100_WINDOW)
     hstate.row += 1
 
     # Online edge->return samples: pair prev tick's edge with this tick return.
     if hstate.prev_mid is not None and hstate.prev_wap_edge is not None:
         ret_1t = mid - hstate.prev_mid
-        hstate.edge_buf.append(hstate.prev_wap_edge)
-        hstate.ret_buf.append(ret_1t)
+        hstate.edge_buf = _push(hstate.edge_buf, hstate.prev_wap_edge, p.EDGE_BETA_WINDOW)
+        hstate.ret_buf  = _push(hstate.ret_buf, ret_1t, p.EDGE_BETA_WINDOW)
     hstate.prev_mid = mid
     hstate.prev_wap_edge = wap_edge
 
@@ -337,7 +339,7 @@ def run_hydrogel(state, hstate):
     if hstate.s17_entry_row is not None and position < 0:
         window_ready = len(hstate.mid_buf_500) >= p.S7_WINDOW
         if window_ready:
-            sorted_window = sorted(hstate.mid_buf_500)
+            sorted_window = sorted(hstate.mid_buf_500[-p.S7_WINDOW:])
             bottom_thresh = sorted_window[int(len(sorted_window) * p.S7_BOTTOM_Q)]
             s7_bottom     = (spread == 7 and mid <= bottom_thresh)
         else:
@@ -464,13 +466,31 @@ V_BS_STRIKES = [5000, 5100, 5200, 5300, 5400]
 V_IV_ADAPT_WINDOW = 50
 V_IV_ADAPT_MIN_HIST = 15
 
+# v33: empirical per-strike fair value model (replaces BS in the BS-take
+# section below). Fair = intrinsic + EXPECTED_PREMIUM[K]; trade when
+# |mid - fair| > max(EDGE_FLOOR, EDGE_SIGMA_MULT * PREMIUM_STD[K]).
+# Calibrated from day-2 416902 log: median premium per strike + tick-level
+# std. The simulator has artificial T (no real expiry), so empirical median
+# is more accurate than BS-implied fair.
+EXPECTED_PREMIUM = {
+    5000: 3.00, 5100: 12.00, 5200: 38.50, 5300: 51.00, 5400: 16.50,
+}
+PREMIUM_STD = {
+    5000: 0.65, 5100: 1.26, 5200: 2.66, 5300: 3.35, 5400: 1.57,
+}
+V_EMP_EDGE_SIGMA_MULT = 4.0   # require >= 4 sigma deviation to take
+V_EMP_EDGE_FLOOR = 5.0        # absolute minimum edge regardless of sigma
+# Tuning sweep across {3..10} sigma x {2,5,10} floor showed 4σ + floor=5
+# captures the most day-2 10k value ($180,504 vs $168,403 v30_swe baseline)
+# without over-trading the high-jitter ATM strikes.
+
 
 def v_bs_call(spot, K, T, vol):
     if T <= 0 or vol <= 0:
         return max(spot - K, 0.0)
     d1 = (math.log(spot / K) + 0.5 * vol * vol * T) / (vol * math.sqrt(T))
     d2 = d1 - vol * math.sqrt(T)
-    return spot * _ncdf(d1) - K * _ncdf(d2)
+    return spot * _ND_VOUCHER.cdf(d1) - K * _ND_VOUCHER.cdf(d2)
 
 
 def v_implied_vol(mkt, spot, K, T, lo=1e-4, hi=5.0):
@@ -611,12 +631,15 @@ def run_vouchers(state, vstate):
 
     spot = v_plain_mid(state.order_depths.get(VEVE_SYM))
     if spot is None:
-        if vstate.last_spot is not None and vstate.spot_age < 3:
+        if vstate.last_spot is not None and vstate.spot_age < 20:
             spot = vstate.last_spot; vstate.spot_age += 1
         else:
             return orders
     else:
         vstate.last_spot = spot; vstate.spot_age = 0
+
+    if vstate.spot_age > 3:
+        return orders
 
     T = max(V_TTE_DAYS_AT_START - timestamp / 1_000_000.0, 0.01) / V_TTE_YEAR
 
@@ -659,6 +682,9 @@ def run_vouchers(state, vstate):
         if new_orders:
             orders.setdefault(sym, []).extend(new_orders)
 
+    # v33: empirical per-strike fair value (replaces BS take). Fair price for
+    # voucher K = intrinsic + EXPECTED_PREMIUM[K]. Take when |mid - fair| >
+    # max(V_EMP_EDGE_FLOOR, V_EMP_EDGE_SIGMA_MULT * PREMIUM_STD[K]).
     for K in V_BS_STRIKES:
         sym = VOUCHER_SYM[K]
         od_v = state.order_depths.get(sym)
@@ -669,9 +695,11 @@ def run_vouchers(state, vstate):
         already_sell = sum(-o.quantity for o in existing if o.quantity < 0)
         cur_pos_buy = pos_v + already_buy
         cur_pos_sell = pos_v - already_sell
-        fv_bs = v_bs_call(spot, K, T, sigma)
-        buy_thr = fv_bs - V_BS_EDGE
-        sell_thr_bs = fv_bs + V_BS_EDGE
+        intrinsic = max(spot - K, 0.0)
+        fv_emp = intrinsic + EXPECTED_PREMIUM[K]
+        edge = max(V_EMP_EDGE_FLOOR, V_EMP_EDGE_SIGMA_MULT * PREMIUM_STD[K])
+        buy_thr = fv_emp - edge
+        sell_thr_bs = fv_emp + edge
         new_orders = []
         for px in sorted(od_v.sell_orders.keys()):
             if px > buy_thr: break
@@ -873,7 +901,6 @@ class Trader:
         try:
             td = json.loads(state.traderData) if state.traderData else {}
         except Exception:
-            logger.print(f"COLD START: traderData parse failed at ts={ts}")
             td = {}
 
         # FALLBACK owns this slice; routing keys live as siblings, never collide.
