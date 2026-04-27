@@ -1,61 +1,68 @@
 #!/bin/bash
 # Master orchestrator — runs all 4 phases sequentially.
-# Each phase reads the previous phase's output JSON.
+# Each phase reads the previous phase's output JSON from results/.
 
 set -e
 cd "$(dirname "$0")"
+mkdir -p results logs
 
 echo "==================================================================="
 echo "RUN ALL PHASES — R4 Manual Challenge GPU Pipeline"
 echo "==================================================================="
 
-# Phase 1: huge grid sweep (~30-60 min depending on grid size)
 echo ""
 echo "===== PHASE 1: HUGE GRID SWEEP ====="
-python phase1_huge_grid.py \
+python -u phase1_huge_grid.py \
     --paths 50000000 \
     --chunk 1000000 \
     --strat_batch 500 \
-    --out phase1_results.json
-echo "Phase 1 complete."
+    --out results/phase1_results.json 2>&1 | tee logs/phase1_log.txt
 
-# Phase 2: deep verification of top 100
 echo ""
-echo "===== PHASE 2: DEEP MULTI-SEED VERIFICATION ====="
-python phase2_deep_verify.py \
-    --phase1_results phase1_results.json \
-    --paths_per_seed 200000000 \
-    --n_seeds 5 \
+echo "===== PHASE 2: DEEP MULTI-SEED VERIFICATION (10K seeds) ====="
+python -u phase2_deep_verify.py \
+    --phase1_results results/phase1_results.json \
+    --paths_per_seed 10000000 \
+    --n_seeds 10000 \
     --top_n 100 \
-    --out phase2_results.json
-echo "Phase 2 complete."
+    --chunk 1000000 \
+    --strat_batch 100 \
+    --out results/phase2_10kseeds_results.json 2>&1 | tee logs/phase2_10kseeds_log.txt
 
-# Phase 3: sensitivity (sigma + KO + jumps) for top 20
 echo ""
 echo "===== PHASE 3: SENSITIVITY ANALYSIS ====="
-python phase3_sensitivity.py \
-    --phase2_results phase2_results.json \
+python -u phase3_sensitivity.py \
+    --phase2_results results/phase2_10kseeds_results.json \
     --paths_per_test 50000000 \
     --top_n 20 \
-    --out phase3_results.json
-echo "Phase 3 complete."
+    --out results/phase3_results.json 2>&1 | tee logs/phase3_log.txt
 
-# Phase 4: antithetic for top 10
 echo ""
 echo "===== PHASE 4: ANTITHETIC TAIL ESTIMATION ====="
-python phase4_antithetic.py \
-    --phase2_results phase2_results.json \
+python -u phase4_antithetic.py \
+    --phase2_results results/phase2_10kseeds_results.json \
     --pairs_per_strat 50000000 \
     --top_n 10 \
-    --out phase4_results.json
-echo "Phase 4 complete."
+    --out results/phase4_results.json 2>&1 | tee logs/phase4_log.txt
+
+echo ""
+echo "===== IMC ACTUAL SCORING (1M-seed bootstrap) ====="
+python -u imc_actual_scoring.py \
+    --phase2_results results/phase2_10kseeds_results.json \
+    --top_n 100 \
+    --n_seeds 1000000 \
+    --n_bootstrap 100000 \
+    --out results/imc_actual_scoring_results.json 2>&1 | tee logs/imc_actual_scoring_log.txt
 
 echo ""
 echo "==================================================================="
 echo "ALL PHASES COMPLETE"
 echo "==================================================================="
-echo "Outputs:"
-echo "  phase1_results.json — huge grid (~30K candidates)"
-echo "  phase2_results.json — deep verify top 100"
-echo "  phase3_results.json — sensitivity for top 20"
-echo "  phase4_results.json — antithetic tight CVaR for top 10"
+echo "Outputs in results/:"
+echo "  phase1_results.json              — huge grid (~233K candidates)"
+echo "  phase2_10kseeds_results.json     — deep verify top 100 at 10K seeds"
+echo "  phase3_results.json              — sensitivity for top 20"
+echo "  phase4_results.json              — antithetic CVaR for top 10"
+echo "  imc_actual_scoring_results.json  — empirical IMC score distribution"
+echo ""
+echo "See MANUAL_R4_FINAL.md for the recommendation."

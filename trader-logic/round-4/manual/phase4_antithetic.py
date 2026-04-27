@@ -122,12 +122,12 @@ def evaluate_antithetic(positions, n_pairs_total, seed, chunk_pairs):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase2_results", type=str, default="phase2_results.json")
+    parser.add_argument("--phase2_results", type=str, default="results/phase2_10kseeds_results.json")
     parser.add_argument("--pairs_per_strat", type=int, default=50_000_000,
                         help="Antithetic pairs per strategy (default 50M = 100M paths)")
     parser.add_argument("--chunk_pairs", type=int, default=500_000)
     parser.add_argument("--top_n", type=int, default=10)
-    parser.add_argument("--out", type=str, default="phase4_results.json")
+    parser.add_argument("--out", type=str, default="results/phase4_results.json")
     args = parser.parse_args()
 
     print("="*100)

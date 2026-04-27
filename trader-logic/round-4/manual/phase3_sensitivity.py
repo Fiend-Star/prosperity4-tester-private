@@ -113,11 +113,11 @@ def evaluate_under_model(positions, n_paths, seed, chunk_paths,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase2_results", type=str, default="phase2_results.json")
+    parser.add_argument("--phase2_results", type=str, default="results/phase2_10kseeds_results.json")
     parser.add_argument("--paths_per_test", type=int, default=50_000_000)
     parser.add_argument("--chunk", type=int, default=1_000_000)
     parser.add_argument("--top_n", type=int, default=20)
-    parser.add_argument("--out", type=str, default="phase3_results.json")
+    parser.add_argument("--out", type=str, default="results/phase3_results.json")
     args = parser.parse_args()
 
     print("="*100)

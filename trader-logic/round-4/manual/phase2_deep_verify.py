@@ -157,13 +157,13 @@ def deep_evaluate(positions, names, n_paths_per_seed, n_seeds, base_seed,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase1_results", type=str, default="phase1_results.json")
+    parser.add_argument("--phase1_results", type=str, default="results/phase1_results.json")
     parser.add_argument("--paths_per_seed", type=int, default=200_000_000)
     parser.add_argument("--n_seeds", type=int, default=5)
     parser.add_argument("--chunk", type=int, default=1_000_000)
     parser.add_argument("--strat_batch", type=int, default=200)
     parser.add_argument("--top_n", type=int, default=100, help="How many top candidates from phase 1 to verify")
-    parser.add_argument("--out", type=str, default="phase2_results.json")
+    parser.add_argument("--out", type=str, default="results/phase2_results.json")
     args = parser.parse_args()
 
     print("="*100)

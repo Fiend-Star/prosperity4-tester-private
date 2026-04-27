@@ -2,9 +2,9 @@
 import json
 import numpy as np
 
-p2_5 = json.load(open("phase2_results.json"))
-p2_500 = json.load(open("phase2_500seeds_results.json"))
-p2_10k = json.load(open("phase2_10kseeds_results.json"))
+p2_5 = json.load(open("results/phase2_results.json"))
+p2_500 = json.load(open("results/phase2_500seeds_results.json"))
+p2_10k = json.load(open("results/phase2_10kseeds_results.json"))
 
 print("=" * 110)
 print("PHASE 2 SEED PROGRESSION: 5 -> 500 -> 10000")

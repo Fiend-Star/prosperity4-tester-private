@@ -2,8 +2,8 @@
 import json
 import numpy as np
 
-p2_5 = json.load(open("phase2_results.json"))
-p2_500 = json.load(open("phase2_500seeds_results.json"))
+p2_5 = json.load(open("results/phase2_results.json"))
+p2_500 = json.load(open("results/phase2_500seeds_results.json"))
 
 print("=" * 110)
 print(f"5-SEED vs 500-SEED PHASE 2 COMPARISON")

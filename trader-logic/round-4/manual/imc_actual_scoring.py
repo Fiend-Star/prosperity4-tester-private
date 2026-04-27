@@ -70,12 +70,12 @@ def encode_position(d):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase2_results", type=str, default="phase2_10kseeds_results.json")
+    parser.add_argument("--phase2_results", type=str, default="results/phase2_10kseeds_results.json")
     parser.add_argument("--n_seeds", type=int, default=1_000_000, help="Universe of independent paths")
     parser.add_argument("--n_bootstrap", type=int, default=100_000, help="Synthetic IMC submission runs per strat")
     parser.add_argument("--top_n", type=int, default=100, help="How many strats to score")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--out", type=str, default="imc_actual_scoring_results.json")
+    parser.add_argument("--out", type=str, default="results/imc_actual_scoring_results.json")
     args = parser.parse_args()
 
     print("=" * 100)

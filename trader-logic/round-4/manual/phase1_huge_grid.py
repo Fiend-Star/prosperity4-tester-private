@@ -230,7 +230,7 @@ def main():
     parser.add_argument("--chunk", type=int, default=1_000_000)
     parser.add_argument("--seed", type=int, default=20260428)
     parser.add_argument("--strat_batch", type=int, default=500)
-    parser.add_argument("--out", type=str, default="phase1_results.json")
+    parser.add_argument("--out", type=str, default="results/phase1_results.json")
     args = parser.parse_args()
 
     print("="*100)

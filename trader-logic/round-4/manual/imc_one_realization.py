@@ -79,7 +79,7 @@ def main():
     print("=" * 100)
 
     # Load top 100 from Phase 2 (10K-seed verified)
-    with open("phase2_10kseeds_results.json") as f:
+    with open("results/phase2_10kseeds_results.json") as f:
         p2 = json.load(f)
     candidates = sorted(p2["ranking"], key=lambda x: -x["mean"])[:100]
     names = [c["name"] for c in candidates]
@@ -186,9 +186,9 @@ def main():
         "chosen_seed_indices": chosen_seeds.tolist(),
         "ranking_under_this_realization": rows,
     }
-    with open("imc_one_realization_results.json", "w") as f:
+    with open("results/imc_one_realization_results.json", "w") as f:
         json.dump(out, f, indent=2)
-    print(f"\nSaved to imc_one_realization_results.json")
+    print(f"\nSaved to results/imc_one_realization_results.json")
 
 
 if __name__ == "__main__":

@@ -188,9 +188,9 @@ def main():
             for i in range(len(names))
         ],
     }
-    with open("imc_user_safe_results.json", "w") as f:
+    with open("results/imc_user_safe_results.json", "w") as f:
         json.dump(out, f, indent=2)
-    print(f"\nSaved to imc_user_safe_results.json")
+    print(f"\nSaved to results/imc_user_safe_results.json")
 
 
 if __name__ == "__main__":
