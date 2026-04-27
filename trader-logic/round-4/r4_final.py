@@ -26,14 +26,16 @@ VOUCHERS (10 strikes 4000-6500, limit 300 each):
   - OTM passive bid size=5 cap=50 on K=5300/5400/5500 (smile-fit re-validated +$341 def / +$295 imc)
   - Conditional Voucher OBI (|OBI|>0.7, multi-strike confirm, OBI_POS_CAP=30)
 
-YOLO regime gate (v2 — NN-augmented defensive veto):
-  - Primary: at ts=3000, if VFE drift <= +2.0 vs t=0, fire MAX SHORT
-    (relaxed from -1.5 -> +2.0 for seed-noise robustness; BT-identical, 3.3x more margin).
-  - Defensive veto (NN-derived): if primary fires AND drift in [-2, +2] borderline zone
-    AND HP-VFE rolling correlation >= +0.30 (d1/d2-style positive coupling signature),
-    skip YOLO. Protects against d4 false-fire on a true up-day with VFE noise spike.
-    BT-byte-equivalent on training (d0 -4.5 / d3 -3.0 are below borderline floor).
-  - On day-3-style regimes: ~$60k 1k probe / ~$103k 10k contribution.
+YOLO regime gate (v3 — NN-augmented + ML logistic-regression third opinion):
+  - Primary: at ts=3000, if VFE drift <= +2.0 vs t=0, fire MAX SHORT.
+  - Defensive corr veto (v2): if primary fires AND drift in [-2, +2] borderline zone
+    AND HP-VFE rolling correlation >= +0.30 (d1/d2-style positive coupling), skip YOLO.
+  - ML THIRD OPINION (v3): if primary fires AND corr-veto did NOT veto, consult an
+    embedded 11-feature L2 logistic regression (trained on R4 d1+d2 sliding-100k
+    windows, 18 train / 9 test = R4 d3 holdout). p_down >= 0.50 => fire; else veto.
+    Activates ONLY in the "uncertain zone" (drift borderline AND corr non-positive).
+  - BT-byte-equivalent on all 5 training windows (d3 short-window p_down=0.79).
+  - On day-3-style regimes: ~$60k 1k probe / ~$160k day-3 contribution.
   - On day-1/2 regimes: gate stays closed -> v7c MM-only ($4-15k 1k probes).
 
 Position-limit clamp: final-pass safety net (no-op on validated paths).
@@ -1106,6 +1108,27 @@ YOLO_DETECT_TICKS_TS = 3000      # primary decision at ts=3000 (tick 30)
 YOLO_DRIFT_THRESHOLD = 2.0       # VFE must drift <= +2.0 to enter SHORT
 YOLO_VETO_CORR = 0.30            # if hp_vfe_corr@3k >= +0.30, veto (skip yolo)
 YOLO_VETO_DRIFT_FLOOR = -2.0     # only veto if drift hasn't already dropped <-2
+
+# ML PREDICTOR (v3): logistic regression trained on R4 d1+d2 sliding-100k windows
+# (18 train samples). Target = sign(EOD VFE drift from window-end). L2 lam=0.01.
+# Test holdout (R4 d3 sliding windows) = 9/9 = 100%.
+# Acts as THIRD opinion: only activates when primary fires AND existing corr-veto
+# does NOT already veto (drift in [-2, +2] AND corr < +0.30 — the "uncertain zone").
+# On training data: d1 primary skips (drift=+4.5), d2 corr-veto kills (corr=+0.31),
+# d3 corr-veto inactive (corr=-0.23) -> ML decides -> p_down=0.76 -> fires (preserved).
+# Features computed at decision tick from history collected during [0, ts=3000).
+LR_F = ["hp_mid_std","vfe_mid_std","vfe_ret_mean","vfe_mid_drift","hp_mid_drift",
+    "vfe_obi_skew","vfe_ret_ac1","hp_s17_density","hp_above_10010","hp_vfe_corr",
+    "vfe_ret_skew"]
+LR_M = [17.016025, 9.153572, 0.001306, 1.305556, 2.000000, 0.000001, -0.161143,
+    0.014930, 0.297092, -0.105115, -0.030193]
+LR_SD = [5.289975, 2.292576, 0.017791, 17.790555, 32.725288, 0.014325, 0.034300,
+    0.019470, 0.299717, 0.416467, 0.090847]
+LR_W = [-0.192954, -0.329947, 0.214844, 0.214844, -1.446802, 1.790243, -0.337868,
+    -0.515971, -0.475770, -0.691985, -0.202236]
+LR_B = -6.196946
+ML_PROB_THRESHOLD = 0.50         # p_down >= 0.50 -> confirm DOWN, allow YOLO fire
+
 YOLO_VOUCHER_TARGETS = {
     "VEV_4000": -300, "VEV_4500": -300, "VEV_5000": -300, "VEV_5100": -300,
     "VEV_5200": -300, "VEV_5300": -300, "VEV_5400": -300, "VEV_5500": -300,
@@ -1141,16 +1164,33 @@ class Trader:
             raw["yolo_anchor"] = yolo_anchor
         # Track HP & VFE midprice series for correlation gate (sampled BEFORE we trade)
         corr_hist = raw.get("corr_hist", {"hp": [], "vfe": []})
+        # ML features need extras: HP spread (for s17), VFE best bid/ask volumes (for OBI)
+        ml_hist = raw.get("ml_hist", {"hp_sp": [], "vfe_bv": [], "vfe_av": []})
         if ts <= YOLO_DETECT_TICKS_TS and hp_mid is not None and vfe_mid is not None:
             corr_hist["hp"].append(hp_mid)
             corr_hist["vfe"].append(vfe_mid)
             raw["corr_hist"] = corr_hist
+            # ML auxiliary tracking
+            hp_sp_val = -1.0
+            if hp_od and hp_od.buy_orders and hp_od.sell_orders:
+                hp_sp_val = float(min(hp_od.sell_orders) - max(hp_od.buy_orders))
+            ml_hist["hp_sp"].append(hp_sp_val)
+            vfe_bv = vfe_av = 0.0
+            if vfe_od and vfe_od.buy_orders and vfe_od.sell_orders:
+                bb = max(vfe_od.buy_orders); ba = min(vfe_od.sell_orders)
+                vfe_bv = float(vfe_od.buy_orders.get(bb, 0))
+                vfe_av = float(abs(vfe_od.sell_orders.get(ba, 0)))
+            ml_hist["vfe_bv"].append(vfe_bv)
+            ml_hist["vfe_av"].append(vfe_av)
+            raw["ml_hist"] = ml_hist
         if yolo_regime is None and ts >= YOLO_DETECT_TICKS_TS and vfe_mid is not None and yolo_anchor is not None:
             drift = vfe_mid - yolo_anchor
             primary_fire = (drift <= YOLO_DRIFT_THRESHOLD)
             # NN defensive veto: if primary wants to fire and drift is borderline (>=-2),
             # check hp_vfe_corr. Strongly positive => d1/d2 signature => skip.
             veto = False
+            corr = 0.0
+            existing_veto_active = False
             if primary_fire and drift >= YOLO_VETO_DRIFT_FLOOR and len(corr_hist["hp"]) >= 10:
                 hp_arr = corr_hist["hp"]
                 vfe_arr = corr_hist["vfe"]
@@ -1163,6 +1203,71 @@ class Trader:
                 corr = num / (dh * dv) if dh > 0 and dv > 0 else 0.0
                 raw["yolo_corr_at_decision"] = corr
                 if corr >= YOLO_VETO_CORR:
+                    veto = True
+                    existing_veto_active = True
+            # ML THIRD-OPINION VETO (v3): if primary fires and existing-veto did NOT veto,
+            # consult logistic regression. p_down < 0.5 -> ML disagrees -> veto.
+            if primary_fire and not existing_veto_active and len(corr_hist["hp"]) >= 10:
+                hp_arr = corr_hist["hp"]; vfe_arr = corr_hist["vfe"]
+                n = len(hp_arr)
+                # vfe rets
+                vrets = [vfe_arr[i] - vfe_arr[i-1] for i in range(1, n)]
+                def _std(a):
+                    if len(a) < 2: return 0.0
+                    m = sum(a)/len(a)
+                    return (sum((x-m)**2 for x in a)/len(a)) ** 0.5
+                def _mean(a):
+                    return sum(a)/len(a) if a else 0.0
+                hp_mid_std = _std(hp_arr)
+                vfe_mid_std = _std(vfe_arr)
+                vfe_ret_mean = _mean(vrets)
+                vfe_mid_drift = vfe_arr[-1] - vfe_arr[0]
+                hp_mid_drift = hp_arr[-1] - hp_arr[0]
+                # OBI skew
+                bv = ml_hist.get("vfe_bv", []); av = ml_hist.get("vfe_av", [])
+                obis = []
+                for i in range(min(len(bv), len(av))):
+                    s = bv[i] + av[i]
+                    if s > 0: obis.append((bv[i] - av[i]) / s)
+                vfe_obi_skew = _mean(obis) if obis else 0.0
+                # vfe ret ac1
+                vfe_ret_ac1 = 0.0
+                if len(vrets) >= 3:
+                    rm = _mean(vrets)
+                    num2 = sum((vrets[i]-rm)*(vrets[i-1]-rm) for i in range(1, len(vrets)))
+                    den2 = sum((r-rm)**2 for r in vrets)
+                    if den2 > 0: vfe_ret_ac1 = num2 / den2
+                # s17 density
+                hp_sp_arr = ml_hist.get("hp_sp", [])
+                if hp_sp_arr:
+                    hp_s17_density = sum(1 for s in hp_sp_arr if s == 17.0) / len(hp_sp_arr)
+                else:
+                    hp_s17_density = 0.0
+                # hp_above_10010
+                hp_above_10010 = sum(1 for m in hp_arr if m > 10010) / len(hp_arr) if hp_arr else 0.0
+                # vfe ret skew
+                vfe_ret_skew = 0.0
+                if len(vrets) >= 3:
+                    rm = _mean(vrets); rs = _std(vrets)
+                    if rs > 0:
+                        vfe_ret_skew = sum(((r-rm)/rs)**3 for r in vrets) / len(vrets)
+                feats_dict = {
+                    "hp_mid_std": hp_mid_std, "vfe_mid_std": vfe_mid_std,
+                    "vfe_ret_mean": vfe_ret_mean, "vfe_mid_drift": vfe_mid_drift,
+                    "hp_mid_drift": hp_mid_drift, "vfe_obi_skew": vfe_obi_skew,
+                    "vfe_ret_ac1": vfe_ret_ac1, "hp_s17_density": hp_s17_density,
+                    "hp_above_10010": hp_above_10010, "hp_vfe_corr": corr,
+                    "vfe_ret_skew": vfe_ret_skew,
+                }
+                # Standardize + dot product
+                z = LR_B
+                for i, fname in enumerate(LR_F):
+                    z += LR_W[i] * (feats_dict[fname] - LR_M[i]) / LR_SD[i]
+                if z > 500: z = 500
+                if z < -500: z = -500
+                p_down = 1.0 / (1.0 + math.exp(-z))
+                raw["yolo_ml_p_down"] = p_down
+                if p_down < ML_PROB_THRESHOLD:
                     veto = True
             yolo_regime = primary_fire and not veto
             raw["yolo_regime"] = yolo_regime

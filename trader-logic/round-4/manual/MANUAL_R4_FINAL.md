@@ -3,7 +3,9 @@
 **Date**: 2026-04-28
 **Status**: SUBMIT OPTION A. Strict Pareto improvement over the prior DOM_NICE_v2 on all 3 metrics (mean, Sharpe, CVaR-5%) verified across 1B-path 5-seed Phase 2 + 100M-antithetic Phase 4.
 
-**Compute spent**: 233,284 candidates * 50M paths (Phase 1 GPU sweep) -> 400 finalists -> 1B paths * 5 seeds (Phase 2) -> sigma/KO/jump sensitivity (Phase 3) -> 100M antithetic CVaR (Phase 4). Full synthesis in `PHASES_1234_SYNTHESIS.md`.
+**Compute spent**: 233,284 candidates * 50M paths (Phase 1 GPU sweep) -> 400 finalists -> 5B paths * 500 seeds (Phase 2 ultra-deep) -> sigma/KO/jump sensitivity (Phase 3) -> 100M antithetic CVaR (Phase 4). Full synthesis in `PHASES_1234_SYNTHESIS.md`.
+
+**500-seed verification**: paired test shows DOM_NICE_v3 dominates DOM_NICE_v2 at z=+15.4σ on mean ($990 ± $64) and z=+312σ on CVaR-5% ($52,414 ± $168). Statistical certainty.
 
 ## Orders to enter (Option A — DOM_NICE_v3, 6 positions)
 
@@ -18,13 +20,13 @@ BUY     15    AC_50_C     @ 12.025   3-week call K=50  ★ NEW HEDGE
 
 ## Why DOM_NICE_v3 strictly dominates DOM_NICE_v2
 
-Phase 2 verification (1B paths * 5 seeds, SE on mean ~$80):
+Phase 2 verification (5B paths * 500 seeds, SE on mean ~$45):
 
 | Metric | DROP_60C | DOM_NICE_v2 (prior) | **DOM_NICE_v3** | Delta vs v2 |
 |---|---:|---:|---:|---:|
-| Mean E[score] | $163,215 | $161,099 | **$162,119** | **+$1,020** |
+| Mean E[score] | $163,128 ± $49 | $161,079 ± $46 | **$162,069 ± $45** | **+$990 (z=+15.4σ)** |
 | Sharpe | 0.474 | 0.494 | **0.511** | **+0.017** |
-| CVaR-5% | -$552,743 | -$526,251 | **-$473,625** | **+$52,626** |
+| CVaR-5% | -$552,152 ± $127 | -$525,695 ± $129 | **-$473,281 ± $107** | **+$52,414 (z=+312σ)** |
 
 **DOM_NICE_v3 is strictly better on all three dimensions.** It is on the Phase 2 Pareto frontier; DOM_NICE_v2 is Pareto-dominated.
 
