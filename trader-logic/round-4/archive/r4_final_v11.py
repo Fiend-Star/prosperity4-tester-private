@@ -1,47 +1,133 @@
-"""r4_final.py — IMC Prosperity 4 Round 4 canonical submission.
+"""r4_v9_volsmile.py — r4_final.py + parabolic smile fit replacing median IV.
 
-BT (10k 3-day): default $263,328 / imc $249,480 / 1k d3 probe $60,390.
-Live projection (BT × 0.96): probe ~$58k / 10k 3-day ~$253k.
-Disabling YOLO collapses 10k def to $153,694 / 1k d3 to -$4,304.
+Frankfurt Hedgehogs (P3 #2) approach: fit iv(K) = a*m^2 + b*m + c where
+m = log(K/spot) across all observed strikes per tick, then use the fitted
+per-strike sigma in BS pricing INSTEAD of a single median across the ATM
+strikes.
 
-ALPHA STACK (every layer theory or t-stat defensible per Frankfurt audit):
+EDA findings (intel/vol_smile_fit.md):
+  - Smile is highly non-flat: K=4000 IV ~0.85, ATM ~0.22-0.27, K=6500 IV ~0.67.
+  - Parabola fits R^2 = 0.989-0.994 across all 3 days.
+  - **Residuals are PERSISTENT (ac1=0.4-0.86), NOT mean-reverting.**
+  - Conclusion: trading "convergence to fitted price" would face wrong-way drift.
+    Instead, just use the fitted smile as a BETTER per-strike vol input.
 
-HP (HYDROGEL_PACK, limit 200):
-  - S17 GIGA SHORT: spread==17 + mid>10010 + z>=2.0 -> short -200, S7-bottom cover, FLIP +200, hold to 10020
-  - Circuit breaker: freeze S17 after 2 FLIP_HOLD timeouts (tail-risk insurance)
-  - VFE-crash gate: skip S17 entry if VFE drifts < -$5 vs early window
-  - z-score MR (window=500, |z|>=2.25)
-  - Passive MM (QUOTE_SIZE=200, slack=1)
+Changes vs r4_final.py:
+  - vol_smile_fit() called once per tick. Fits parabola from ALL strikes with
+    valid IVs. Returns per-strike fitted sigma dict.
+  - BS-take loop reads sigma from smile-fit dict (per-strike) instead of the
+    global median. ATM strikes barely change; if smile fits poorly, falls back
+    to median.
+  - Deep-OTM passive bid (5300/5400/5500) uses smile-fit sigma when available.
 
-VFE (VELVETFRUIT_EXTRACT, limit 200):
-  - Wall-Mid MM (highest-volume bid/ask midpoint = institutional anchor)
-  - Layer-E spread-state aggressive lift (spread==2 ask-drop / spread==3 bid-rise)
-  - Mark 49 fade (M49 SELL -> BUY 60 at ask, hold 5 ticks; t=+20 H=1, n=105)
+If BT total (def + imc) > $509,877, ship as r4_v9. Else shelf.
 
-VOUCHERS (10 strikes 4000-6500, limit 300 each):
-  - BS taking with parabolic smile-fit sigma (centered m, extrinsic-weighted, K=4000 excluded from fit)
-  - Deep-ITM theta carry MM (VEV_4000/4500 around intrinsic, cap 100)
-  - Voucher passive MM (best+/-1, min_spread=2)
-  - Deep-OTM bid=0 size=100 (VEV_6000/6500: Mark 22 dumps to Mark 01 at price=0)
-  - OTM passive bid size=5 cap=50 on K=5300/5400/5500 (smile-fit re-validated +$341 def / +$295 imc)
-  - Conditional Voucher OBI (|OBI|>0.7, multi-strike confirm, OBI_POS_CAP=30)
+= = = (original docstring continues) = = =
 
-YOLO regime gate (v2 — NN-augmented defensive veto):
-  - Primary: at ts=3000, if VFE drift <= +2.0 vs t=0, fire MAX SHORT
-    (relaxed from -1.5 -> +2.0 for seed-noise robustness; BT-identical, 3.3x more margin).
-  - Defensive veto (NN-derived): if primary fires AND drift in [-2, +2] borderline zone
-    AND HP-VFE rolling correlation >= +0.30 (d1/d2-style positive coupling signature),
-    skip YOLO. Protects against d4 false-fire on a true up-day with VFE noise spike.
-    BT-byte-equivalent on training (d0 -4.5 / d3 -3.0 are below borderline floor).
-  - On day-3-style regimes: ~$60k 1k probe / ~$103k 10k contribution.
-  - On day-1/2 regimes: gate stays closed -> v7c MM-only ($4-15k 1k probes).
+r4_v6_m49.py — v5 + Mark 49 VFE fade layer.
 
-Position-limit clamp: final-pass safety net (no-op on validated paths).
+NEW vs v5:
+  - MARK 49 FADE (intel/mark49_alpha.md): Mark 49 is a "wrong-side" taker on VFE.
+    When Mark 49 SELLS VFE (qty>=M49_QTY_MIN), BUY M49_SIZE at best_ask, hold
+    M49_HOLD ticks. Mirror for Mark 49 BUYS. Cap inventory at +/-M49_POS_CAP.
+    Empirical (3-day, mid-to-mid):
+      M49 SELL → mid +$1.90 H=1 (t=+20.0, n=105)
+      M49 BUY  → mid -$1.26 H=1 (t=-4.0,  n=17)
+    Theoretical max +$6,165. 1k day-3 probe near-flat (n=2 firings = +$75).
 
-REJECTED via Frankfurt audit (intel/parsimony_audit.md, theory_audit.md):
-  VFE momentum one-shot, Mark 55 follow, HP edge-beta MM, intrinsic arb,
-  call-spread arb (dead), VEV_5200 edge=5 carve-out.
-"""
+NOTE: Brief's sign convention was inverted vs round-4 CSVs. Verified twice in
+intel/mark49_alpha.py. Original v5 docstring preserved below.
+
+= = =
+
+r4_final_v5.py — v4 + Conditional Voucher OBI layer (Pareto winner).
+
+NEW vs v4:
+  3. CONDITIONAL VOUCHER OBI (Phase A re-test): when OBI = (bid_vol-ask_vol)/sum
+     exceeds ±0.7 with optional spread compression gate, AGGRESSIVELY take the
+     side with multi-strike confirmation across ATM strikes 5100-5500. 2× size
+     when 3+ strikes agree. Active strikes: 4000, 5200-5500.
+
+PRESERVED from v4:
+  1. S17 CIRCUIT BREAKER (Agent 21): freeze S17 entries after 2 FLIP_HOLD timeouts.
+  2. POSITION-LIMIT CLAMP (Agent 32): final-pass safety net.
+
+FINAL v5 BT (post-sweep optimization):
+  1k d1 probe: $4,818  (vs v3 $3,231, +$1,587)
+  1k d2 probe: $15,706 (vs v3 $15,506, +$200)
+  1k d3 probe: $6,390  (vs v3 $5,360, +$1,030)
+  10k 3-day default: $162,930 (vs v3 $130,570, +$32,360) ★★★
+  10k 3-day imc:     $155,885 (vs v3 $121,002, +$34,883) ★★★
+
+Sweep findings (each parameter optimized via BT):
+  - HP QUOTE_SIZE: 25→200 (+$24,568 def / +$24,656 imc) ★ DOMINANT GAIN
+  - VFE_MOMO_LOOKBACK: 50→25 (+$700 def / +$1,802 imc)
+  - VFE_MOMO_TP: 10→12 (+$1,038 def / +$751 imc)
+  - OBI_POS_CAP: 200→30 (+$1,916 def / +$2,444 imc)
+  - HP S17 z-threshold: 2.0 confirmed optimal
+  - VEV_5200 BS edge: insensitive in [3,7], 5.0 fine
+  - VFE momentum threshold: -3.0 confirmed optimal
+  - OBI threshold: 0.7 confirmed optimal
+  - DEEP_ITM_POS_CAP: 100 confirmed optimal
+
+STRICTLY PARETO-DOMINATES v3 and v4 on ALL 5 test windows.
+Live projection (BT × 0.99): 1k probe $6,326 / 10k def $161k / 10k imc $154k.
+
+Original v3 docstring preserved below.
+
+r4_final_v3.py — R4 RE-SUBMISSION 2 after 17-agent alpha hunt.
+
+EVOLUTION:
+  494304 (z=2.25 only) → -$9,997 LIVE 1k day 3
+  v2 (S17 VFE gate + VFE momo) → +$1,016 1k day 3 / $111,422 10k 3-day
+  v3 (this) → adds Agent 1's HP S17 z-gate (+$11k), Agent 6's VEV_5200 edge=5 fix,
+    Agent 8's VEV_6000/6500 deep-OTM bid (+$900), Agent 21 circuit breaker.
+
+ALPHA STACK in v3:
+  HP layer:
+    + S17 z-gate (Agent 1): require (mid - mean_500)/sd_500 >= 2.0 to enter S17.
+      Day 3 win rate 66% → 83%. +$11k 10k 3-day, 1k probe unchanged.
+    + VFE-CRASH GATE (kept from v2): VFE drift < -$5 → block S17.
+    + S17 circuit breaker (Agent 21): freeze S17 after 2 FLIP_HOLD timeouts.
+    + z-score MR (window=500, threshold=2.25)
+    + passive MM with edge-beta calibration
+
+  VFE layer:
+    + Wall-Mid MM + Layer-E spread-state lift (kept)
+    + One-shot momentum short (kept from v2)
+
+  Voucher layer:
+    + VEV_5200 BS_EDGE=5 per-strike (Agent 6): -$259 → +$6,878 day 3 default.
+    + VEV_6000/6500 bid=0 size=100 (Agent 8): +$900 deterministic 3-day.
+    + (rest unchanged: deep ITM theta, intrinsic arb, BS taking)
+
+REJECTED layers (BT-validated negative):
+  - Counterparty (v6/v7) — substitution effect
+  - Delta hedging (Agent 18) — destroys $7,749 unhedged alignment
+  - Vol surface MM (Agent 11) — IV is slow RW, vol-arb sub-tick
+  - Call-spread arb (Agent 15) — 0/1.35M opportunities (dead code)
+  - Global BS_EDGE=3 (Agent 5) — risky day-2 5100 collapse
+
+R4 BT (default mode):
+                     | r4_final (494304) | r4_final_v2 (v12) |  Δ
+  1k day 1           |      $2,402       |      $3,177       | +$775
+  1k day 2           |      $15,265      |      $15,469      | +$204
+  1k day 3 (probe)   |      -$9,860      |      $1,016       | +$10,876
+  10k day 3          |      $38,715      |      $45,394      | +$6,679
+  10k 3-day          |      $107,542     |      $111,422     | +$3,880
+  10k 3-day imc      |      $100,156     |      $109,818     | +$9,662
+
+Strictly dominates r4_final on ALL test windows.
+
+INTENTIONALLY EXCLUDED:
+  - Counterparty layer (Mark 67/49 VFE): didn't add net alpha in BT (v6/v7 tested).
+  - Voucher BS_EDGE tightening: voucher PnL near saturation per intel/voucher_alpha.md.
+  - DEEP_ITM_POS_CAP bump 100→150: was a no-op (BT identical, never bound).
+
+COMPLIANCE: Per IMC policy 2026-04-27 ("smart reverse engineering of bots OK,
+hardcoded pricing/external/bug exploitation = DQ"), v2 uses purely observable
+market features (VFE drift, mid velocity) — no hardcoded prices, no timestamps,
+no external data. Should be DQ-safe."""
 
 import itertools
 import json
@@ -145,6 +231,11 @@ class HydrogelParams:
     # ===================== DYNAMIC calibration (v22) ===================
     Z500_WINDOW = 500
     STD100_WINDOW = 100
+    EDGE_BETA_WINDOW = 500
+    EDGE_BETA_MIN_SAMPLES = 50
+    EDGE_BETA_SHRINK = 0.5
+    LAYER_A_SCALE = 3.0
+    LAYER_A_CLIP = 1.0
 
 
 def _mean(buf):
@@ -165,6 +256,10 @@ def _push(buf, value, maxlen):
     buf = buf + [value]
     return buf[-maxlen:] if len(buf) > maxlen else buf
 
+def _clip(value, lo, hi):
+    return max(lo, min(hi, value))
+
+
 def compute_book_features(order_depth):
     buys  = order_depth.buy_orders
     sells = order_depth.sell_orders
@@ -174,9 +269,25 @@ def compute_book_features(order_depth):
     spread   = best_ask - best_bid
     if spread <= 0: return {}
     mid = (best_bid + best_ask) / 2.0
+    sorted_bids = sorted(buys.keys(),  reverse=True)
+    sorted_asks = sorted(sells.keys(), reverse=False)
+    def px(lst, i): return lst[i] if i < len(lst) else None
+    def sz(book, p): return abs(book[p]) if p is not None else 0.0
+    bid_px = [px(sorted_bids, i) for i in range(3)]
+    ask_px = [px(sorted_asks, i) for i in range(3)]
+    bid_sz = [sz(buys,  p) for p in bid_px]
+    ask_sz = [sz(sells, p) for p in ask_px]
+    bid_num = sum((bid_px[i] or 0) * bid_sz[i] for i in range(3) if bid_px[i])
+    ask_num = sum((ask_px[i] or 0) * ask_sz[i] for i in range(3) if ask_px[i])
+    bid_den = sum(bid_sz[i] for i in range(3) if bid_px[i])
+    ask_den = sum(ask_sz[i] for i in range(3) if ask_px[i])
+    bid_wap = bid_num / bid_den if bid_den > 0 else best_bid
+    ask_wap = ask_num / ask_den if ask_den > 0 else best_ask
+    book_wap_edge_L3 = ((bid_wap + ask_wap) / 2.0) - mid
     return {
         "best_bid": best_bid, "best_ask": best_ask,
         "spread": spread, "mid": mid,
+        "book_wap_edge_L3": book_wap_edge_L3,
     }
 
 
@@ -190,6 +301,10 @@ class HydrogelState:
         self.s7_covering: bool = False
         self.flip_holding: bool = False
         self.flip_entry_row: Optional[int] = None
+        self.prev_mid: Optional[float] = None
+        self.prev_wap_edge: Optional[float] = None
+        self.edge_buf: List[float] = []
+        self.ret_buf: List[float] = []
         self.vfe_buf: List[float] = []  # v10: VFE mid for crash gate
         self.s17_failed_count: int = 0  # v4: circuit breaker — # FLIP_HOLD timeout exits
 
@@ -203,6 +318,10 @@ class HydrogelState:
             "s7_cov":    self.s7_covering,
             "fh":        self.flip_holding,
             "fer":       self.flip_entry_row,
+            "pmid":      self.prev_mid,
+            "pedge":     self.prev_wap_edge,
+            "edgeb":     self.edge_buf,
+            "retb":      self.ret_buf,
             "vfeb":      self.vfe_buf,
             "s17_fc":    self.s17_failed_count,
         }
@@ -218,6 +337,10 @@ class HydrogelState:
         s.s7_covering       = d.get("s7_cov", False)
         s.flip_holding      = d.get("fh", False)
         s.flip_entry_row    = d.get("fer")
+        s.prev_mid          = d.get("pmid")
+        s.prev_wap_edge     = d.get("pedge")
+        s.edge_buf          = d.get("edgeb", [])
+        s.ret_buf           = d.get("retb", [])
         s.vfe_buf           = d.get("vfeb", [])
         s.s17_failed_count  = d.get("s17_fc", 0)
         return s
@@ -225,6 +348,7 @@ class HydrogelState:
 
 def run_hydrogel(state, hstate):
     # S17 entry/build → S7-bottom percentile cover → flip long to FLIP_TARGET → hold to FLIP_EXIT_MID.
+    # Passive MM fallback uses online edge-beta calibration: beta = cov(edge, ret) / var(edge).
     P      = Product.HYDROGEL_PACK
     orders = []
     p      = HydrogelParams
@@ -242,11 +366,20 @@ def run_hydrogel(state, hstate):
     spread   = features["spread"]
     best_bid = int(features["best_bid"])
     best_ask = int(features["best_ask"])
+    wap_edge = features["book_wap_edge_L3"]
 
     # Update buffers
     hstate.mid_buf_500 = _push(hstate.mid_buf_500, mid, p.Z500_WINDOW)
     hstate.mid_buf_100 = _push(hstate.mid_buf_100, mid, p.STD100_WINDOW)
     hstate.row += 1
+
+    # Online edge->return samples: pair prev tick's edge with this tick return.
+    if hstate.prev_mid is not None and hstate.prev_wap_edge is not None:
+        ret_1t = mid - hstate.prev_mid
+        hstate.edge_buf = _push(hstate.edge_buf, hstate.prev_wap_edge, p.EDGE_BETA_WINDOW)
+        hstate.ret_buf  = _push(hstate.ret_buf, ret_1t, p.EDGE_BETA_WINDOW)
+    hstate.prev_mid = mid
+    hstate.prev_wap_edge = wap_edge
 
     # Layer 0A: S17 short with S7-bottom-percentile reversal trigger.
     if hstate.s17_entry_row is not None and position < 0:
@@ -425,8 +558,17 @@ def run_hydrogel(state, hstate):
             orders.append(Order(P, best_ask, buy_qty))
         return orders, hstate
 
-    # Passive MM fallback. Edge-beta skew tested (LEAN audit: noise +3/+30/+8); not used.
-    bid_offset = 0
+    # Passive MM fallback with dynamic Layer-A skew (online edge beta).
+    if len(hstate.edge_buf) >= p.EDGE_BETA_MIN_SAMPLES:
+        ex = _mean(hstate.edge_buf) or 0.0
+        ey = _mean(hstate.ret_buf) or 0.0
+        var_x  = _mean([(x - ex) ** 2 for x in hstate.edge_buf]) or 0.0
+        cov_xy = _mean([(x - ex) * (y - ey) for x, y in zip(hstate.edge_buf, hstate.ret_buf)]) or 0.0
+        beta = (cov_xy / var_x) if var_x > 1e-9 else 0.0
+    else:
+        beta = p.LAYER_A_SCALE
+    beta_eff = p.EDGE_BETA_SHRINK * beta
+    bid_offset = _clip(wap_edge * beta_eff, -p.LAYER_A_CLIP, p.LAYER_A_CLIP)
     slack = 1
 
     fv = int(round(mid))
@@ -467,6 +609,9 @@ VOUCHER_STRIKES_OTM_PASSIVE = [5300, 5400, 5500]
 VOUCHER_SYM = {k: f"VEV_{k}" for k in VOUCHER_STRIKES_ALL}
 V_TTE_DAYS_AT_START = 4.0
 V_TTE_YEAR = 250.0
+V_INTRINSIC_EDGE = 2
+V_INTRINSIC_QTY = 50
+V_ARB_SIZE = 10
 V_VOUCHER_MM_SIZE = 40   # v5d sweep: was 20, +$446 def / +$297 imc
 V_VOUCHER_MIN_SPREAD = 2
 V_POST_SLACK_VE = 1
@@ -544,10 +689,19 @@ class VoucherState:
         # v12 Layer E: VFE spread-state lift — track prev L1 bid/ask
         self.prev_ve_ap1: Optional[float] = None
         self.prev_ve_bp1: Optional[float] = None
+        # v11 VFE momentum-short
+        self.vfe_momo_buf: List[float] = []
+        self.vfe_momo_short_entry: Optional[float] = None
+        self.vfe_momo_fired: bool = False  # v12: one-shot-per-day
         # v6_m49: Mark 49 VFE fade state
+        # m49_long_remaining counts shares we still want to BUY toward target +M49_SIZE.
+        # m49_long_until is timestamp at which to flatten LONG fade.
+        # Symmetric for SHORT side.
         self.m49_long_until: Optional[int] = None
         self.m49_short_until: Optional[int] = None
-        self.m49_seen: List[int] = []
+        self.m49_seen: List[int] = []  # ts of recent M49 fills we've already acted on
+        # v7: Mark 55 follow-flow state
+        self.m55_flow_buf: List[int] = []
 
     def to_dict(self):
         return {
@@ -556,9 +710,13 @@ class VoucherState:
             "sa": self.spot_age,
             "p_ap": self.prev_ve_ap1,
             "p_bp": self.prev_ve_bp1,
+            "vfe_momo_buf": getattr(self, "vfe_momo_buf", []),
+            "vfe_momo_short_entry": getattr(self, "vfe_momo_short_entry", None),
+            "vfe_momo_fired": getattr(self, "vfe_momo_fired", False),
             "m49_lu": self.m49_long_until,
             "m49_su": self.m49_short_until,
             "m49_seen": self.m49_seen[-32:],
+            "m55_flow_buf": getattr(self, "m55_flow_buf", []),
         }
 
     @staticmethod
@@ -571,19 +729,53 @@ class VoucherState:
         s.spot_age = d.get("sa", 0)
         s.prev_ve_ap1 = d.get("p_ap")
         s.prev_ve_bp1 = d.get("p_bp")
+        s.vfe_momo_buf = d.get("vfe_momo_buf", [])
+        s.vfe_momo_short_entry = d.get("vfe_momo_short_entry")
+        s.vfe_momo_fired = d.get("vfe_momo_fired", False)
         s.m49_long_until = d.get("m49_lu")
         s.m49_short_until = d.get("m49_su")
         s.m49_seen = d.get("m49_seen", [])
+        s.m55_flow_buf = d.get("m55_flow_buf", [])
         return s
 
 
 # ── v6: Mark 49 VFE fade ─────────────────────────────────────────────────────
 # Empirical (3-day, 105 SELLs / 17 BUYs):
-#   M49 SELL → mid +1.90 (t=+20.0) at H=1, Bonferroni-significant.
+#   M49 SELL → mid +1.90 (t=+20.0) at H=1
+#   M49 BUY  → mid -1.26 (t=-4.0)  at H=1
+# Hold 10 ticks. Cap inventory contribution at +/-30.
 M49_QTY_MIN_SELL = 8     # M49 sells qty>=8 (93/105)
 M49_QTY_MIN_BUY  = 1
+
+# v7: Mark 55 follow-flow alpha
+M55_WINDOW = 50
+M55_THRESH = 30  # v7c confirmed
+M55_TAKE_SIZE = 20
+M55_POS_CAP = 60
+
+
+def _compute_m55_netflow(state, vstate):
+    """Mark 55 net flow on VFE — combines market_trades AND own_trades.
+    Returns (sum_net_flow_window, this_tick_net)."""
+    tick_net = 0
+    mts = state.market_trades.get(VEVE_SYM, []) or []
+    for t in mts:
+        if t.buyer == "Mark 55":
+            tick_net += t.quantity
+        elif t.seller == "Mark 55":
+            tick_net -= t.quantity
+    own = state.own_trades.get(VEVE_SYM, []) or []
+    for t in own:
+        if t.buyer == "Mark 55":
+            tick_net += t.quantity
+        elif t.seller == "Mark 55":
+            tick_net -= t.quantity
+    vstate.m55_flow_buf.append(tick_net)
+    if len(vstate.m55_flow_buf) > M55_WINDOW:
+        vstate.m55_flow_buf = vstate.m55_flow_buf[-M55_WINDOW:]
+    return sum(vstate.m55_flow_buf), tick_net
 M49_HOLD_TICKS = 5  # v7c sweep optimum
-M49_SIZE = 60  # v7c sweep: was 20, +$1,252 def
+M49_SIZE = 60  # v7c sweep: was 20, +\,252 def
 M49_POS_CAP = 20
 
 
@@ -652,6 +844,78 @@ def run_mark49_fade(state, vstate):
         if target_sell > 0:
             extra.append(Order(P, bb, -target_sell))
             extra_sell = target_sell
+
+    return extra, extra_buy, extra_sell
+
+
+# ── VFE momentum short (v11): SHORT 200 when (mid - mid_50_ago) <= -3 ─────────
+# Source: intel/day3_1k_alpha.md — corr=-0.459, t=-8.13 on 1k day 3.
+# Exit: TP at MTM >= +$2000 (= -10/share * 200), SL at MTM <= -$3000 (= +15/share * 200).
+VFE_MOMO_BUF = 60          # rolling buffer length
+VFE_MOMO_LOOKBACK = 25     # v5b: was 50, sweep +$700 def / +$1,802 imc, +$729 d3 probe
+VFE_MOMO_THRESH = -3.0     # mid drop trigger
+VFE_MOMO_SIZE = 200        # short size
+VFE_MOMO_TP = 12.0         # v5c re-sweep at QS=200: was 9, +$1,038 def / +$751 imc
+VFE_MOMO_SL = 15.0         # stop loss per share (price rises $15)
+
+
+def run_vfe_momentum(state, vstate, current_vfe_orders, signal_buy_used, signal_sell_used):
+    """v10 theory-first: VFE momentum ONE-SHOT REMOVED (BT-FIT)."""
+    return [], 0, 0
+    P = VEVE_SYM  # unreachable
+    od = state.order_depths.get(P)
+    if not od or not od.buy_orders or not od.sell_orders:
+        return [], 0, 0
+
+    bb = max(od.buy_orders); ba = min(od.sell_orders)
+    mid = (bb + ba) / 2.0
+    pos = state.position.get(P, 0)
+
+    # Update buffer
+    vstate.vfe_momo_buf = vstate.vfe_momo_buf + [mid]
+    if len(vstate.vfe_momo_buf) > VFE_MOMO_BUF:
+        vstate.vfe_momo_buf = vstate.vfe_momo_buf[-VFE_MOMO_BUF:]
+
+    extra: List[Order] = []
+    extra_buy = 0
+    extra_sell = 0
+
+    # Check exit first (if we have an open short from prior entry)
+    if vstate.vfe_momo_short_entry is not None:
+        entry_mid = vstate.vfe_momo_short_entry
+        # MTM per share = entry - current (positive = profit on short)
+        per_share_pnl = entry_mid - mid
+        # Total MTM = per_share * 200
+        total_pnl = per_share_pnl * VFE_MOMO_SIZE
+        cover = False
+        if total_pnl >= VFE_MOMO_TP * VFE_MOMO_SIZE:
+            cover = True  # take profit
+        elif total_pnl <= -VFE_MOMO_SL * VFE_MOMO_SIZE:
+            cover = True  # stop loss
+        if cover:
+            # Buy back at ask. Use position-aware size.
+            qty_to_cover = min(VFE_MOMO_SIZE, 200 - pos)
+            qty_to_cover = max(0, qty_to_cover)
+            if qty_to_cover > 0:
+                extra.append(Order(P, ba, qty_to_cover))
+                extra_buy = qty_to_cover
+            vstate.vfe_momo_short_entry = None
+        # If not covering, no new orders this tick (we already hold the short)
+        return extra, extra_buy, extra_sell
+
+    # Check entry: velocity over 50 ticks (v12: one-shot-per-day)
+    if (not vstate.vfe_momo_fired
+        and len(vstate.vfe_momo_buf) >= VFE_MOMO_LOOKBACK + 1):
+        velocity = mid - vstate.vfe_momo_buf[-VFE_MOMO_LOOKBACK - 1]
+        if velocity <= VFE_MOMO_THRESH and pos >= -50:
+            target_short = VFE_MOMO_SIZE
+            available = 200 + pos
+            qty = min(target_short, available - signal_sell_used)
+            if qty > 0:
+                extra.append(Order(P, bb, -qty))
+                extra_sell = qty
+                vstate.vfe_momo_short_entry = mid
+                vstate.vfe_momo_fired = True  # don't re-fire today
 
     return extra, extra_buy, extra_sell
 
@@ -806,8 +1070,34 @@ def run_vouchers(state, vstate):
         vstate.prev_ve_ap1 = ba_ve
         vstate.prev_ve_bp1 = bb_ve
 
+    # v11: VFE momentum-short layer (PRE-MM, claims position headroom)
+    momo_orders, momo_buy, momo_sell = run_vfe_momentum(state, vstate, [], 0, 0)
+
     # v6_m49: Mark 49 fade layer (PRE-MM, claims position headroom)
     m49_orders, m49_buy, m49_sell = run_mark49_fade(state, vstate)
+
+    # v7: Mark 55 follow-flow layer (PRE-MM, claims position headroom)
+    m55_orders: List[Order] = []
+    m55_buy = 0
+    m55_sell = 0
+    m55_signal, _ = _compute_m55_netflow(state, vstate)
+    if od_ve and od_ve.buy_orders and od_ve.sell_orders:
+        bb_m = max(od_ve.buy_orders); ba_m = min(od_ve.sell_orders)
+        pos_m = state.position.get(VEVE_SYM, 0)
+        if m55_signal >= M55_THRESH and pos_m < M55_POS_CAP:
+            avail = -od_ve.sell_orders[ba_m]
+            room = min(M55_POS_CAP - pos_m, 200 - pos_m - layer_e_buy - m49_buy - momo_buy)
+            q = min(M55_TAKE_SIZE, avail, room)
+            if q > 0:
+                m55_orders.append(Order(VEVE_SYM, ba_m, +q))
+                m55_buy = q
+        elif m55_signal <= -M55_THRESH and pos_m > -M55_POS_CAP:
+            avail = od_ve.buy_orders[bb_m]
+            room = min(M55_POS_CAP + pos_m, 200 + pos_m - layer_e_sell - m49_sell - momo_sell)
+            q = min(M55_TAKE_SIZE, avail, room)
+            if q > 0:
+                m55_orders.append(Order(VEVE_SYM, bb_m, -q))
+                m55_sell = q
 
     if od_ve and od_ve.buy_orders and od_ve.sell_orders:
         wm = v_wall_mid(od_ve)
@@ -815,12 +1105,22 @@ def run_vouchers(state, vstate):
             bb = max(od_ve.buy_orders); ba = min(od_ve.sell_orders)
             pos = state.position.get(VEVE_SYM, 0)
             fv = round(wm)
-            tb = 200 - pos - layer_e_buy - m49_buy
-            ts = 200 + pos - layer_e_sell - m49_sell
+            # Account for Layer E + VFE-momentum + M49 + M55 commitments in headroom
+            tb = 200 - pos - layer_e_buy - momo_buy - m49_buy - m55_buy
+            ts = 200 + pos - layer_e_sell - momo_sell - m49_sell - m55_sell
             half = 100
             mbp = fv - 1 if pos > half else fv
             msp = fv + 1 if pos < -half else fv
-            ve_orders = list(ve_layer_e) + list(m49_orders)
+            # If momentum has us short, suppress passive WM bidding (don't fight signal)
+            momentum_active = vstate.vfe_momo_short_entry is not None
+            if momentum_active:
+                tb = 0  # don't add long-side via WM MM while in momentum short
+            # v6 design: keep WM MM running on both sides. Tested with
+            # passive M49 entries (collided with WM, zero incremental fills),
+            # aggressive crossings (paid full spread = wiped edge),
+            # and side-suppression (no Pareto win). Final config below
+            # is the "least harmful" state — see intel/mark49_alpha.md.
+            ve_orders = list(momo_orders) + list(ve_layer_e) + list(m49_orders) + list(m55_orders)
             for p, v in sorted(od_ve.sell_orders.items()):
                 if tb > 0 and p <= mbp:
                     q = min(tb, -v); ve_orders.append(Order(VEVE_SYM, p, q)); tb -= q
@@ -833,7 +1133,7 @@ def run_vouchers(state, vstate):
                 ve_orders.append(Order(VEVE_SYM, max(fv + V_POST_SLACK_VE, ba - 1), -ts))
             orders[VEVE_SYM] = ve_orders
         else:
-            fallback = list(ve_layer_e) + list(m49_orders)
+            fallback = list(momo_orders) + list(ve_layer_e) + list(m49_orders)
             if fallback:
                 orders[VEVE_SYM] = fallback
 
@@ -872,7 +1172,29 @@ def run_vouchers(state, vstate):
         s = smile_sigmas.get(K)
         return s if s is not None else sigma
 
-    # Intrinsic arb REMOVED (Frankfurt parsimony audit: 0/0/0 firings - never triggers).
+    for K in VOUCHER_STRIKES_ALL:
+        if K in VOUCHER_STRIKES_SKIP: continue   # v12 Layer A
+        sym = VOUCHER_SYM[K]
+        od_v = state.order_depths.get(sym)
+        if od_v is None: continue
+        existing = orders.get(sym, [])
+        already_buy = sum(o.quantity for o in existing if o.quantity > 0)
+        already_sell = sum(-o.quantity for o in existing if o.quantity < 0)
+        pos_v = state.position.get(sym, 0)
+        tb = 300 - pos_v - already_buy
+        ts = 300 + pos_v - already_sell
+        intrinsic = max(spot - K, 0.0)
+        deep_itm = K in VOUCHER_STRIKES_DEEP_ITM
+        new_orders = []
+        for p, v in sorted(od_v.sell_orders.items()):
+            if tb > 0 and p < intrinsic - V_INTRINSIC_EDGE:
+                q = min(tb, -v, V_INTRINSIC_QTY); new_orders.append(Order(sym, p, q)); tb -= q
+        sell_thr = intrinsic + V_INTRINSIC_EDGE if deep_itm else spot + V_INTRINSIC_EDGE
+        for p, v in sorted(od_v.buy_orders.items(), reverse=True):
+            if ts > 0 and p > sell_thr:
+                q = min(ts, v, V_INTRINSIC_QTY); new_orders.append(Order(sym, p, -q)); ts -= q
+        if new_orders:
+            orders.setdefault(sym, []).extend(new_orders)
 
     for K in V_BS_STRIKES:
         sym = VOUCHER_SYM[K]
@@ -907,7 +1229,33 @@ def run_vouchers(state, vstate):
         if new_orders:
             orders.setdefault(sym, []).extend(new_orders)
 
-    # Call-spread arb REMOVED (Frankfurt parsimony audit: 0/1.35M pair-ticks - dead code).
+    committed_buy = {sym: 0 for sym in VOUCHER_SYM.values()}
+    committed_sell = {sym: 0 for sym in VOUCHER_SYM.values()}
+    for sym, ord_list in orders.items():
+        if sym in committed_buy:
+            committed_buy[sym] = sum(o.quantity for o in ord_list if o.quantity > 0)
+            committed_sell[sym] = sum(-o.quantity for o in ord_list if o.quantity < 0)
+    for K_lo, K_hi in itertools.combinations(VOUCHER_STRIKES_ALL, 2):
+        # v12 Layer A: skip pairs involving 6000/6500
+        if K_lo in VOUCHER_STRIKES_SKIP or K_hi in VOUCHER_STRIKES_SKIP: continue
+        sym_lo = VOUCHER_SYM[K_lo]; sym_hi = VOUCHER_SYM[K_hi]
+        od_lo = state.order_depths.get(sym_lo)
+        od_hi = state.order_depths.get(sym_hi)
+        if od_lo is None or od_hi is None: continue
+        pos_lo = state.position.get(sym_lo, 0); pos_hi = state.position.get(sym_hi, 0)
+        if od_lo.sell_orders and od_hi.buy_orders:
+            ask_lo = min(od_lo.sell_orders); bid_hi = max(od_hi.buy_orders)
+            if ask_lo - bid_hi < 0:
+                ask_lo_vol = -od_lo.sell_orders[ask_lo]
+                bid_hi_vol = od_hi.buy_orders[bid_hi]
+                room_buy_lo = 300 - pos_lo - committed_buy[sym_lo]
+                room_sell_hi = 300 + pos_hi - committed_sell[sym_hi]
+                size = min(V_ARB_SIZE, ask_lo_vol, bid_hi_vol, room_buy_lo, room_sell_hi)
+                if size > 0:
+                    orders.setdefault(sym_lo, []).append(Order(sym_lo, ask_lo, +size))
+                    orders.setdefault(sym_hi, []).append(Order(sym_hi, bid_hi, -size))
+                    committed_buy[sym_lo] += size
+                    committed_sell[sym_hi] += size
 
     for K in VOUCHER_STRIKES_TRADEABLE:
         sym = VOUCHER_SYM[K]
@@ -963,30 +1311,34 @@ def run_vouchers(state, vstate):
                 qty = min(DEEP_ITM_MM_SIZE, room_sell)
                 orders.setdefault(sym, []).append(Order(sym, ask_px, -qty))
 
-    # OTM passive bid (re-validated under smile sigma: +$341 def / +$295 imc / 0 on probes).
-    # Prior fixed-sigma audit had -$325 def / -$686 imc; smile flipped sign.
+    # ── v12 Layer C: Passive OTM bid on VEV_5300/5400/5500 ──────────────────
+    # One-sided seller flow → bid at min(best_bid+1, floor(BS_fair-2)).
+    # Posting BELOW best_bid is fine — taker hits all levels; we just queue.
+    # qty 5 per strike, cap +50 long. No asks (no buyer flow).
     OTM_BID_SIZE = 5
     OTM_BID_POS_CAP = 50
-    OTM_BID_EDGE = 2  # bid must be at least 2 below smile-fitted BS fair
+    OTM_BID_EDGE = 2  # bid must be at least 2 below BS fair
     for K in VOUCHER_STRIKES_OTM_PASSIVE:
         sym = VOUCHER_SYM[K]
         od_v = state.order_depths.get(sym)
         if od_v is None or not od_v.buy_orders or not od_v.sell_orders: continue
-        bb = max(od_v.buy_orders); ba = min(od_v.sell_orders)
+        bb = max(od_v.buy_orders)
+        ba = min(od_v.sell_orders)
         fv_bs = v_bs_call(spot, K, T, _sigma_for(K))
         bs_cap = math.floor(fv_bs - OTM_BID_EDGE)
         bid_px = min(bb + 1, bs_cap)
         if bid_px <= 0: continue
-        if bid_px >= ba: continue
+        if bid_px >= ba: continue  # must not cross ask
         pos_v = state.position.get(sym, 0)
         existing = orders.get(sym, [])
         existing_buy = sum(o.quantity for o in existing if o.quantity > 0)
-        room = OTM_BID_POS_CAP - pos_v - existing_buy
-        if room > 0:
-            q = min(room, OTM_BID_SIZE)
+        # Cap long position from this layer at +50 (independent of other long sources)
+        tb_v = OTM_BID_POS_CAP - pos_v - existing_buy
+        if tb_v > 0:
+            q = min(tb_v, OTM_BID_SIZE)
             orders.setdefault(sym, []).append(Order(sym, bid_px, q))
 
-    # ── VEV_6000/6500 deep-OTM free $0.50 MTM ──────────────────────────────
+    # ── v3 Agent 8: VEV_6000/6500 deep-OTM free $0.50 MTM ─────────────────
     # Mark 22 dumps to Mark 01 at price=0 every tick. Post bid=0 size=100.
     # +$900 deterministic 3-day BT, no delta risk (spot needs +700 to threaten).
     DEEP_OTM_BID_PX = 0
@@ -1094,18 +1446,9 @@ def _clamp_to_position_limits(orders_by_sym, positions, debug_log=None):
     return clamped
 
 
-# v8 HYBRID: regime-conditional yolo overlay (NN-augmented v2: defensive gate)
-YOLO_DETECT_TICKS_TS = 3000      # primary decision at ts=3000 (tick 30)
-# NN insight: hp_vfe_corr in [0..3000ts] cleanly separates d3 (cor=-0.275) from d1 (+0.20)
-# d2 (+0.36) at the same ts=3000 window. Use as a defensive VETO: if primary fires
-# but corr is strongly positive (d1/d2 signature), skip yolo to protect against
-# r4 day-4 having a "false-fire" regime (vfe slightly down by ts=30 but actually up-day).
-# Veto only triggers if corr is strongly positive (>=+0.30) AND vfe_drift wasn't deeply
-# negative (>=-2). Training data: d0 (eod=-6) has corr=+0.35 at ts=3k — fires currently.
-# We accept losing d0's yolo (small) for d4-protection.
-YOLO_DRIFT_THRESHOLD = 2.0       # VFE must drift <= +2.0 to enter SHORT
-YOLO_VETO_CORR = 0.30            # if hp_vfe_corr@3k >= +0.30, veto (skip yolo)
-YOLO_VETO_DRIFT_FLOOR = -2.0     # only veto if drift hasn't already dropped <-2
+# v8 HYBRID: regime-conditional yolo overlay
+YOLO_DETECT_TICKS_TS = 3000      # decide at ts=3000 (tick 30)
+YOLO_DRIFT_THRESHOLD = -1.5      # VFE must drift <= -1.5 to enter
 YOLO_VOUCHER_TARGETS = {
     "VEV_4000": -300, "VEV_4500": -300, "VEV_5000": -300, "VEV_5100": -300,
     "VEV_5200": -300, "VEV_5300": -300, "VEV_5400": -300, "VEV_5500": -300,
@@ -1124,47 +1467,20 @@ class Trader:
         except Exception:
             raw = {}
 
-        # v8 YOLO REGIME GATE (decide at ts=3000) + NN defensive veto
+        # v8 YOLO REGIME GATE (decide at ts=3000)
         yolo_anchor = raw.get("yolo_anchor")
         yolo_regime = raw.get("yolo_regime", None)  # None=undecided, True=short, False=skip
         ts = state.timestamp
         vfe_od = state.order_depths.get("VELVETFRUIT_EXTRACT")
-        hp_od = state.order_depths.get("HYDROGEL_PACK")
         vfe_mid = None
-        hp_mid = None
         if vfe_od and vfe_od.buy_orders and vfe_od.sell_orders:
             vfe_mid = (max(vfe_od.buy_orders) + min(vfe_od.sell_orders)) / 2.0
-        if hp_od and hp_od.buy_orders and hp_od.sell_orders:
-            hp_mid = (max(hp_od.buy_orders) + min(hp_od.sell_orders)) / 2.0
         if yolo_anchor is None and vfe_mid is not None:
             yolo_anchor = vfe_mid
             raw["yolo_anchor"] = yolo_anchor
-        # Track HP & VFE midprice series for correlation gate (sampled BEFORE we trade)
-        corr_hist = raw.get("corr_hist", {"hp": [], "vfe": []})
-        if ts <= YOLO_DETECT_TICKS_TS and hp_mid is not None and vfe_mid is not None:
-            corr_hist["hp"].append(hp_mid)
-            corr_hist["vfe"].append(vfe_mid)
-            raw["corr_hist"] = corr_hist
         if yolo_regime is None and ts >= YOLO_DETECT_TICKS_TS and vfe_mid is not None and yolo_anchor is not None:
             drift = vfe_mid - yolo_anchor
-            primary_fire = (drift <= YOLO_DRIFT_THRESHOLD)
-            # NN defensive veto: if primary wants to fire and drift is borderline (>=-2),
-            # check hp_vfe_corr. Strongly positive => d1/d2 signature => skip.
-            veto = False
-            if primary_fire and drift >= YOLO_VETO_DRIFT_FLOOR and len(corr_hist["hp"]) >= 10:
-                hp_arr = corr_hist["hp"]
-                vfe_arr = corr_hist["vfe"]
-                n = len(hp_arr)
-                mh = sum(hp_arr) / n
-                mv = sum(vfe_arr) / n
-                num = sum((h - mh) * (v - mv) for h, v in zip(hp_arr, vfe_arr))
-                dh = sum((h - mh) ** 2 for h in hp_arr) ** 0.5
-                dv = sum((v - mv) ** 2 for v in vfe_arr) ** 0.5
-                corr = num / (dh * dv) if dh > 0 and dv > 0 else 0.0
-                raw["yolo_corr_at_decision"] = corr
-                if corr >= YOLO_VETO_CORR:
-                    veto = True
-            yolo_regime = primary_fire and not veto
+            yolo_regime = (drift <= YOLO_DRIFT_THRESHOLD)
             raw["yolo_regime"] = yolo_regime
 
         # HP layer always runs

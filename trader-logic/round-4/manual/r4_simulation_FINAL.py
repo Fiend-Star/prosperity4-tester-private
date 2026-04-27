@@ -100,6 +100,20 @@ STRATEGIES: Dict[str, List[Tuple[str, str, int]]] = {
         ("AC_45_P",   "buy",  50),
     ],
 
+    # OPTIMAL_7POS — what's currently entered in the user's IMC UI.
+    # Same as DOM_NICE but with AC_50_P instead of AC_45_P, and AC_50_C=25 not 30.
+    # E[score] ≈ +$157,737 ; CVaR-5% ≈ -$359,913 ; Sharpe ≈ 0.598 ; P>0 = 72.0%
+    # Strictly Pareto-dominated by DOM_NICE (-$1,571 mean for same tail).
+    "OPTIMAL_7POS": [
+        ("AC_50_CO",  "sell", 50),
+        ("AC_45_KO",  "buy",  500),
+        ("AC_40_BP",  "sell", 50),
+        ("AC_50_P_2", "buy",  50),
+        ("AC_50_C_2", "buy",  50),
+        ("AC_50_P",   "buy",  50),
+        ("AC_50_C",   "buy",  25),
+    ],
+
     # Pure max-EV (no hedges) — highest expected score but worst tail
     # E[score] ≈ +$163,135 ; CVaR-5% ≈ -$552,361 ; Sharpe ≈ 0.474
     "DROP_60C": [

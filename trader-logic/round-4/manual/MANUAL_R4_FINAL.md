@@ -1,9 +1,11 @@
-# R4 Manual Challenge — FINAL Recommendation (8-Agent + 1B-Path Verified)
+# R4 Manual Challenge — FINAL Recommendation (Phase 1-4 Verified)
 
-**Date**: 2026-04-27
-**Status**: SUBMIT THESE 7 ORDERS. Strict Pareto improvement over the prior 7POS recommendation.
+**Date**: 2026-04-28
+**Status**: SUBMIT OPTION A. Strict Pareto improvement over the prior DOM_NICE_v2 on all 3 metrics (mean, Sharpe, CVaR-5%) verified across 1B-path 5-seed Phase 2 + 100M-antithetic Phase 4.
 
-## Orders to enter (DOM_NICE — 7 positions)
+**Compute spent**: 233,284 candidates * 50M paths (Phase 1 GPU sweep) -> 400 finalists -> 1B paths * 5 seeds (Phase 2) -> sigma/KO/jump sensitivity (Phase 3) -> 100M antithetic CVaR (Phase 4). Full synthesis in `PHASES_1234_SYNTHESIS.md`.
+
+## Orders to enter (Option A — DOM_NICE_v3, 6 positions)
 
 ```
 SELL    50    AC_50_CO    @ 22.20    chooser
@@ -11,105 +13,105 @@ BUY    500    AC_45_KO    @  0.175   knock-out put (B=35)
 SELL    50    AC_40_BP    @  5.00    binary put
 BUY     50    AC_50_P_2   @  9.75    2-week put
 BUY     50    AC_50_C_2   @  9.75    2-week call
-BUY     30    AC_50_C     @ 12.05    3-week call hedge
-BUY     50    AC_45_P     @  9.10    3-week 45-strike put hedge ★ NEW
+BUY     15    AC_50_C     @ 12.025   3-week call K=50  ★ NEW HEDGE
 ```
 
-## Why DOM_NICE beats the prior OPTIMAL_7POS
+## Why DOM_NICE_v3 strictly dominates DOM_NICE_v2
 
-| Metric (200M paths verified) | OPTIMAL_7POS (prior) | **DOM_NICE (new)** | Δ |
-|---|---:|---:|---:|
-| Mean | $157,845 | **$159,259** | **+$1,414** ★ (t=30.0, p<1e-100) |
-| CVaR-5% | -$359,558 | -$359,571 | tied |
-| CVaR-2% | -$443,273 | -$441,887 | +$1,386 |
-| Sharpe | 0.599 | 0.598 | tied |
-| P(positive) | 72.0% | 71.8% | tied |
+Phase 2 verification (1B paths * 5 seeds, SE on mean ~$80):
 
-**Strict Pareto improvement on the mean axis** with no tail-risk cost.
+| Metric | DROP_60C | DOM_NICE_v2 (prior) | **DOM_NICE_v3** | Delta vs v2 |
+|---|---:|---:|---:|---:|
+| Mean E[score] | $163,215 | $161,099 | **$162,119** | **+$1,020** |
+| Sharpe | 0.474 | 0.494 | **0.511** | **+0.017** |
+| CVaR-5% | -$552,743 | -$526,251 | **-$473,625** | **+$52,626** |
 
-### Mechanism: replace `BUY 50 AC_50_P` with `BUY 50 AC_45_P`
+**DOM_NICE_v3 is strictly better on all three dimensions.** It is on the Phase 2 Pareto frontier; DOM_NICE_v2 is Pareto-dominated.
 
-| | AC_50_P (3w put K=50) | AC_45_P (3w put K=45) |
-|---|---:|---:|
-| BS fair | $12.027 | $9.089 |
-| Market ask | $12.05 | $9.10 |
-| Edge per unit | -$0.023 | **-$0.011** ← half the cost |
-| Pays when | S_T < 50 (often) | S_T < 45 (only deep-down) |
+## Phase 2 Pareto frontier (top of)
 
-The 45-strike put is closer to BS fair AND better-targeted at the ACTUAL tail-risk drivers (KO knockouts at S<35 + chooser→put + BP triggers all happen in the deep-down zone, which 45_P hedges efficiently).
+The 11-point Pareto frontier on (mean, Sharpe, CVaR-5%):
 
-## All Pareto-frontier candidates (1B-path verified)
+| # | Mean | Sharpe | CVaR-5% | Hedge added to DROP_60C base |
+|---|---:|---:|---:|---|
+| 1 | $163,215 | 0.474 | -$552,743 | (none — base) |
+| 2 | $162,358 | 0.496 | -$526,604 | +25 AC_45_P |
+| **3** | **$162,119** | **0.511** | **-$473,625** | **+15 AC_50_C** ★ Option A |
+| 4 | $161,262 | 0.564 | -$411,031 | +15 AC_50_C +25 AC_45_P |
+| 5 | $160,531 | 0.567 | -$395,777 | +25 AC_50_C +25 AC_45_P |
+| 6 | $160,405 | 0.581 | -$396,040 | +15 AC_50_C +50 AC_45_P |
+| 7 | $159,674 | **0.605** | **-$357,680** | +25 AC_50_C +50 AC_45_P ★ Option B |
 
-| Strategy | Mean | CVaR-5% | CVaR-2% | Sharpe | P>0 |
-|---|---:|---:|---:|---:|---:|
-| DROP_60C (5 pos, no hedge) | **$163,135** | -$552,361 | -$649,426 | 0.474 | 68.4% |
-| **DOM_NICE (7 pos) ★** | **$159,259** | -$359,571 | -$441,887 | 0.598 | 71.8% |
-| DOM_CLEAN2 (7 pos) | $157,813 | **-$337,786** | -$418,526 | 0.627 | 73.0% |
-| DOM_CLEAN1 (7 pos) | $155,645 | -$311,184 | -$386,065 | 0.653 | 73.8% |
-| OPTIMAL_7POS (prior) | $157,845 | -$359,558 | -$443,273 | 0.599 | 72.0% |
-| KO300_HEDGED | $139,214 | -$320,724 | (not measured) | 0.605 | 72.4% |
-| USER_SAFE (KO=60) | $57,237 | -$62,553 | -$96,847 | **0.970** | **83.4%** |
+DOM_NICE_v2 (DROP+50 AC_35_P) sits at $161,099 / 0.494 / -$526k — beaten on all axes by frontier point #3.
 
-## Decision matrix — which to ship?
+## Mechanism: why AC_50_C hedge beats AC_35_P hedge
 
-| If you want... | Ship | Mean / CVaR-5% |
-|---|---|---|
-| Strict max E[score] (trust σ=2.51 exactly) | **DROP_60C** | $163k / -$552k |
-| **Best risk-adjusted in high-mean band ★** | **DOM_NICE** | $159k / -$360k |
-| Slightly tighter tail at no EV cost | DOM_CLEAN2 | $158k / -$338k |
-| More tail protection | DOM_CLEAN1 | $156k / -$311k |
-| Insurance against σ misspec (long-vega) | DOM_NICE / KO300 | flat across σ |
-| Max P(positive score) | USER_SAFE | $57k / -$63k |
+DROP_60C has two structural tail risks:
 
-## What the 8 verification agents found
+1. **Down-tail (S << 50)**: KO knocks out below S=35, leaving binary put liability uncovered. AC_35_P plugs this. (DOM_NICE_v2's choice.)
+2. **Up-tail (S >> 50)**: Short chooser becomes a short call paying (S-50) on the 3-week leg. AC_50_C_2 only covers the 2-week portion. AC_50_C (3-week K=50) plugs this.
 
-1. **Hidden alpha hunt** (59 multi-leg combos): NO new arbs. Market is static-arb-free at 0.5-cent grid.
-2. **KO monitoring sensitivity**: 4/day fair = 0.2064 (matches brief). Market prices as if 16/day implied — that's the mispricing alpha. BUY 500 confirmed correct under brief.
-3. **Sigma sensitivity** (15 σ values, 50M paths each): break-even σ=2.516 (between OPTIMAL_7POS and DROP_60C). DOM_NICE inherits the long-vega property — gains $76k under +0.10 σ stress while DROP_60C loses $80k.
-4. **Constrained optimization** (200M paths, SA polish): found DOM_NICE/CLEAN1/CLEAN2 strictly dominating OPTIMAL_7POS. The agent that surfaced this is the **MVP**.
-5. **Worst-case path analysis** (1M trials): 100/100 of worst trials had `min_S < 35` (KO breach) — confirms that 45-strike put is the right tail hedge.
-6. **Alt models** (36 specs: Heston, Merton jumps, Student-t, GARCH, microstructure noise): OPTIMAL_7POS-class only goes negative at σ≤2.13 (14% below stated — implausible).
-7. **1B-path empirical CDF** (5 seeds × 200M each): confirms 100M-path numbers within 0.3% relative error.
-8. **Multi-seed reproducibility** (in progress): expected to confirm headline numbers stable.
+Phase 2 found the up-tail hedge yields more variance reduction per dollar of EV cost (~$75/contract for AC_50_C vs ~$95/contract for AC_35_P). At qty=15, AC_50_C reduces tail variance enough that the CVaR-5% gain exceeds the EV cost — strict Pareto improvement. AC_35_P never crosses that threshold.
 
-## Critical model risks (residual)
+## Decision matrix
+
+| If you want... | Ship | Mean | Sharpe | CVaR-5% |
+|---|---|---:|---:|---:|
+| Strict max E[score] | DROP_60C | $163,215 | 0.474 | -$552k |
+| **Pareto-dominant (recommended) ★** | **DOM_NICE_v3 (Option A)** | **$162,119** | **0.511** | **-$473k** |
+| Best Sharpe near max mean | Option B (7 pos, +25 AC_50_C +50 AC_45_P) | $159,674 | 0.605 | -$358k |
+| Insurance against sigma misspec | DOM_NICE_v2 (deprecated; dominated) | $161,099 | 0.494 | -$526k |
+
+## Robustness (Phase 3 sigma sensitivity)
+
+Mean E[score] vs sigma:
+
+| Strategy | sigma=2.20 | sigma=2.51 (nominal) | sigma=2.55 | sigma=2.80 |
+|---|---:|---:|---:|---:|
+| DROP_60C | $354,001 | $163,672 | $142,076 | $19,691 |
+| **DOM_NICE_v3 (+15 AC_50_C)** | $278,055 | $162,584 | $150,845 | $90,786 |
+| DOM_NICE_v2 (+50 AC_35_P) | $202,110 | $161,496 | $159,613 | $161,881 |
+
+DOM_NICE_v3 is ~6x more sigma-robust than DROP_60C and ~half-way between DROP_60C and DOM_NICE_v2 on extreme misspec.
+
+The brief specifies sigma=2.51 exactly. Under that assumption, DOM_NICE_v3 is the right pick. If you fear vol misspec >+1.5%, fall back to DOM_NICE_v2 (Option C in synthesis).
+
+## Critical risk model (residual)
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| KO monitoring frequency | Medium | Brief explicit (4/day); our position values it correctly |
-| σ misspecification (>+1.5%) | Low | DOM_NICE is long-vega → insurance built-in |
-| Barrier inequality (`<` vs `≤`) | Trivial | Measure-zero event for continuous GBM |
-| Multiplier semantics | Confirmed | Team chat confirms ×3000 PnL scalar |
-| Position limit | Fixed | All recommended portfolios within caps |
+| KO monitoring frequency | Medium (uniform across all candidates) | Brief explicit (4/day); confirmed Phase 3 5-seed |
+| Sigma misspec (>+1.5%) | Low | DOM_NICE_v3 is robust to ~+1%; if you fear more, ship DOM_NICE_v2 |
+| Barrier inequality (`<` vs `<=`) | Trivial | Measure-zero for continuous GBM; discrete monitoring matches brief |
+| Multiplier semantics | Confirmed | Team chat ×3000 |
+| Position limit | Within | All 6 positions <= caps; AC_50_C at 15/50 (35 remaining) |
 
-## Files (full audit trail)
+## Position limit verification
+
+| Symbol | Cap | DOM_NICE_v3 |
+|---|---:|---:|
+| AC_50_CO | 50 | -50 ✓ |
+| AC_40_BP | 50 | -50 ✓ |
+| AC_45_KO | 500 | +500 ✓ |
+| AC_50_P_2 | 50 | +50 ✓ |
+| AC_50_C_2 | 50 | +50 ✓ |
+| AC_50_C | 50 | +15 ✓ (35 headroom) |
+
+## Files (this submission)
 
 ```
 trader-logic/round-4/manual/
-├── MANUAL_R4_FINAL.md             ★ THIS — DOM_NICE recommendation
-├── manual_r4_solver.py             # base BS + chooser + binary + KO
-├── ko_precise.py                   # 5-seed × 1M-path KO MC
-├── corrected_metrics.py            # both per-path and per-trial CVaR
-├── verify_dom_clean.py             # 4-way verification at 200M paths
-├── verify_refined.py               # 200M-path REFINED_9POS verifier
-├── billion_path_verification.py    # 1B-path empirical CDF
-├── billion_path_results.md         # 1B-path full report
-├── pareto_max.py                   # 132-strategy multi-objective sweep
-├── pareto_deep.py                  # 47-strategy Pareto frontier
-├── extended_compare.py             # 11-strategy comparison
-├── compare_to_user.py              # paired diff vs user references
-├── compare_to_current.py           # paired diff vs user's UI orders
-├── global_max.py                   # exhaustive boundary search
-├── global_search_v2.{py,md}        # CP agent #1 (linearity proof)
-├── cp_optimal.{py,md}              # CP agent #2 (134 vectors)
-├── constrained_opt.{py,md}         # MVP — found DOM_NICE/CLEAN
-├── quant_audit.{py,md}             # quant-finance agent
-├── ml_research.{py,md}             # 10M-path engine + ablation
-├── sigma_sensitivity_v2.{py,md}    # σ sensitivity + vega/volga
-├── ko_monitoring_v2.{py,md}        # monitoring frequency Bayesian
-├── alt_models_v2.py                # Heston/jumps/GARCH/Student-t
-├── worst_case_v2.py                # worst-trial loss attribution
-├── multiseed_v2.py                 # 20-seed reproducibility
-├── hidden_alpha_v2.{py,md}         # 59-combo arb hunt
-└── intel_recon.md                  # multiplier confirmation
+  MANUAL_R4_FINAL.md            ★ THIS — DOM_NICE_v3 recommendation
+  PHASES_1234_SYNTHESIS.md      ★ Full 4-phase synthesis report
+  phase1_results.json           # 233K candidates -> 400 finalists
+  phase1_log.txt                # Phase 1 stdout (47 min run)
+  phase2_results.json           # 100 strats * 1B paths * 5 seeds
+  phase3_results.json           # sigma/KO/jump sensitivity grids
+  phase3_log.txt                # Phase 3 stdout
+  phase4_results.json           # 10 strats * 100M antithetic
+  phase1_huge_grid.py           # GPU sweep harness
+  phase2_deep_verify.py         # 1B-path 5-seed harness
+  phase3_sensitivity.py         # sigma + KO + jump sensitivity
+  phase4_antithetic.py          # antithetic-paired CVaR estimator
+  r4_simulation_FINAL.py        # canonical numpy reference simulator
 ```
