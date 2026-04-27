@@ -1,6 +1,0 @@
-ditmcap=50 | 1k=Total profit: 5,755 | def=Total profit: 134,602 | imc=Total profit: 126,232
-ditmcap=100 | 1k=Total profit: 5,755 | def=Total profit: 134,708 | imc=Total profit: 126,232
-ditmcap=150 | 1k=Total profit: 5,755 | def=Total profit: 134,708 | imc=Total profit: 126,232
-ditmcap=200 | 1k=Total profit: 5,755 | def=Total profit: 134,708 | imc=Total profit: 126,232
-ditmcap=250 | 1k=Total profit: 5,755 | def=Total profit: 134,708 | imc=Total profit: 126,232
-ditmcap=300 | 1k=Total profit: 5,755 | def=Total profit: 134,708 | imc=Total profit: 126,232

@@ -1,5 +1,0 @@
-cap=10 | 1k=Total profit: 6,390 | def=Total profit: 161,938 | imc=Total profit: 154,832
-cap=20 | 1k=Total profit: 6,390 | def=Total profit: 162,652 | imc=Total profit: 155,146
-cap=30 | 1k=Total profit: 6,390 | def=Total profit: 162,930 | imc=Total profit: 155,885
-cap=40 | 1k=Total profit: 6,390 | def=Total profit: 163,212 | imc=Total profit: 155,280
-cap=50 | 1k=Total profit: 6,390 | def=Total profit: 163,115 | imc=Total profit: 154,844

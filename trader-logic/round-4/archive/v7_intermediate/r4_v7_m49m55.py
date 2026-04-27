@@ -723,7 +723,7 @@ M49_QTY_MIN_BUY  = 1
 
 # v7: Mark 55 follow-flow alpha
 M55_WINDOW = 50
-M55_THRESH = 30  # v7c confirmed
+M55_THRESH = 30
 M55_TAKE_SIZE = 20
 M55_POS_CAP = 60
 
@@ -748,8 +748,8 @@ def _compute_m55_netflow(state, vstate):
     if len(vstate.m55_flow_buf) > M55_WINDOW:
         vstate.m55_flow_buf = vstate.m55_flow_buf[-M55_WINDOW:]
     return sum(vstate.m55_flow_buf), tick_net
-M49_HOLD_TICKS = 5  # v7c sweep optimum
-M49_SIZE = 60  # v7c sweep: was 20, +\,252 def
+M49_HOLD_TICKS = 5
+M49_SIZE = 20
 M49_POS_CAP = 20
 
 
@@ -1314,16 +1314,6 @@ def _clamp_to_position_limits(orders_by_sym, positions, debug_log=None):
     return clamped
 
 
-# v8 HYBRID: regime-conditional yolo overlay
-YOLO_DETECT_TICKS_TS = 3000      # decide at ts=3000 (tick 30)
-YOLO_DRIFT_THRESHOLD = -1.5      # VFE must drift <= -1.5 to enter
-YOLO_VOUCHER_TARGETS = {
-    "VEV_4000": -300, "VEV_4500": -300, "VEV_5000": -300, "VEV_5100": -300,
-    "VEV_5200": -300, "VEV_5300": -300, "VEV_5400": -300, "VEV_5500": -300,
-}
-YOLO_VFE_TARGET = -200
-
-
 class Trader:
     def run(self, state: TradingState) -> Tuple[Dict[Symbol, List[Order]], int, str]:
         orders      = {p: [] for p in state.order_depths}
@@ -1335,64 +1325,19 @@ class Trader:
         except Exception:
             raw = {}
 
-        # v8 YOLO REGIME GATE (decide at ts=3000)
-        yolo_anchor = raw.get("yolo_anchor")
-        yolo_regime = raw.get("yolo_regime", None)  # None=undecided, True=short, False=skip
-        ts = state.timestamp
-        vfe_od = state.order_depths.get("VELVETFRUIT_EXTRACT")
-        vfe_mid = None
-        if vfe_od and vfe_od.buy_orders and vfe_od.sell_orders:
-            vfe_mid = (max(vfe_od.buy_orders) + min(vfe_od.sell_orders)) / 2.0
-        if yolo_anchor is None and vfe_mid is not None:
-            yolo_anchor = vfe_mid
-            raw["yolo_anchor"] = yolo_anchor
-        if yolo_regime is None and ts >= YOLO_DETECT_TICKS_TS and vfe_mid is not None and yolo_anchor is not None:
-            drift = vfe_mid - yolo_anchor
-            yolo_regime = (drift <= YOLO_DRIFT_THRESHOLD)
-            raw["yolo_regime"] = yolo_regime
-
-        # HP layer always runs
         hstate = HydrogelState.from_dict(raw.get("hg", {}))
         hydrogel_orders, hstate = run_hydrogel(state, hstate)
         orders[Product.HYDROGEL_PACK] = hydrogel_orders
         raw["hg"] = hstate.to_dict()
 
-        if yolo_regime is True:
-            # YOLO MODE — short voucher portfolio + VFE, suppress voucher MM
-            vstate = VoucherState.from_dict(raw.get("v9", {}))
-            for sym, target in YOLO_VOUCHER_TARGETS.items():
-                od_v = state.order_depths.get(sym)
-                if od_v is None or not od_v.buy_orders: continue
-                pos_v = state.position.get(sym, 0)
-                desired_short = target - pos_v  # negative if we need to sell more
-                if desired_short < 0:
-                    qty = -desired_short
-                    bb_v = max(od_v.buy_orders)
-                    avail = od_v.buy_orders[bb_v]
-                    q = min(qty, avail, 300)
-                    if q > 0:
-                        orders.setdefault(sym, []).append(Order(sym, bb_v, -q))
-            # VFE short
-            if vfe_od and vfe_od.buy_orders:
-                pos_vfe = state.position.get("VELVETFRUIT_EXTRACT", 0)
-                desired = YOLO_VFE_TARGET - pos_vfe
-                if desired < 0:
-                    qty = -desired
-                    bb = max(vfe_od.buy_orders)
-                    avail = vfe_od.buy_orders[bb]
-                    q = min(qty, avail, 200)
-                    if q > 0:
-                        orders.setdefault("VELVETFRUIT_EXTRACT", []).append(Order("VELVETFRUIT_EXTRACT", bb, -q))
-            raw["v9"] = vstate.to_dict()
-        else:
-            # v7c MODE — normal voucher MM + VFE momo + counterparty
-            vstate = VoucherState.from_dict(raw.get("v9", {}))
-            voucher_orders = run_vouchers(state, vstate)
-            for sym, ord_list in voucher_orders.items():
-                if sym not in orders: orders[sym] = []
-                orders[sym].extend(ord_list)
-            raw["v9"] = vstate.to_dict()
+        vstate = VoucherState.from_dict(raw.get("v9", {}))
+        voucher_orders = run_vouchers(state, vstate)
+        for sym, ord_list in voucher_orders.items():
+            if sym not in orders: orders[sym] = []
+            orders[sym].extend(ord_list)
+        raw["v9"] = vstate.to_dict()
 
+        # v4: Defensive position-limit clamp (no-op on validated v3 paths)
         clamp_log: List[str] = []
         orders = _clamp_to_position_limits(orders, state.position, clamp_log)
         for line in clamp_log:

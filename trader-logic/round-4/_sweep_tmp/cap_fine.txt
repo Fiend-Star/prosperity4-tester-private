@@ -1,3 +1,0 @@
-v5_capN100 | 1k= | def=Total profit: 134,200 | imc=Total profit: 125,763
-v5_capN50 | 1k= | def= | imc=
-v5_capN75 | 1k= | def= | imc=

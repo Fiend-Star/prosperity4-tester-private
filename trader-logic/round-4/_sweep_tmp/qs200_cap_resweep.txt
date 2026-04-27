@@ -1,5 +1,0 @@
-cap=50 | def=Total profit: 163,115 | imc=Total profit: 154,844
-cap=75 | def=Total profit: 162,082 | imc=Total profit: 154,482
-cap=100 | def=Total profit: 161,014 | imc=Total profit: 153,441
-cap=150 | def=Total profit: 160,900 | imc=Total profit: 152,358
-cap=200 | def=Total profit: 160,544 | imc=Total profit: 151,962

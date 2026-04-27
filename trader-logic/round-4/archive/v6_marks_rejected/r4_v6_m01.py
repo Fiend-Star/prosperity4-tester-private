@@ -1,18 +1,24 @@
-"""r4_v6_m49.py — v5 + Mark 49 VFE fade layer.
+"""r4_v6_m01.py — v5 + Mark 01 directional VFE skew.
 
 NEW vs v5:
-  - MARK 49 FADE (intel/mark49_alpha.md): Mark 49 is a "wrong-side" taker on VFE.
-    When Mark 49 SELLS VFE (qty>=M49_QTY_MIN), BUY M49_SIZE at best_ask, hold
-    M49_HOLD ticks. Mirror for Mark 49 BUYS. Cap inventory at +/-M49_POS_CAP.
-    Empirical (3-day, mid-to-mid):
-      M49 SELL → mid +$1.90 H=1 (t=+20.0, n=105)
-      M49 BUY  → mid -$1.26 H=1 (t=-4.0,  n=17)
-    Theoretical max +$6,165. 1k day-3 probe near-flat (n=2 firings = +$75).
+  4. MARK 01 VFE SIGNAL: scan state.market_trades for VELVETFRUIT_EXTRACT.
+     If Mark 01 BUYS  (qty>=3) -> set m01_signal=+1, persist 5 ticks
+     If Mark 01 SELLS (qty>=3) -> set m01_signal=-1, persist 5 ticks
+     Then shift Wall-Mid fair-value by +0.5 (BUY) or -0.5 (SELL).
+     Forensic basis (intel/mark01_alpha.md):
+       - Mark 01 BUY  VFE: h=1 mid +0.233 (t=+3.32, n=260)
+       - Mark 01 SELL VFE: h=1 mid -0.211 (t=-3.10, n=244)
+       - Baseline VFE drift = 0.000 (t=-0.08, n=29997)
+       - Both directional, both >2sd, both Bonferroni-survive across 7 marks.
+     Per-day: d1=+44 d2=-15 d3=+46 (over 5 ticks, signed long).
+     2/3 days positive, capacity ~85 events/day x +0.23 = +20 mids/day base.
 
-NOTE: Brief's sign convention was inverted vs round-4 CSVs. Verified twice in
-intel/mark49_alpha.py. Original v5 docstring preserved below.
+PRESERVED from v5:
+  1. S17 CIRCUIT BREAKER (Agent 21): freeze S17 entries after 2 FLIP_HOLD timeouts.
+  2. POSITION-LIMIT CLAMP (Agent 32): final-pass safety net.
+  3. Conditional Voucher OBI.
 
-= = =
+Original v5 docstring preserved below.
 
 r4_final_v5.py — v4 + Conditional Voucher OBI layer (Pareto winner).
 
@@ -667,15 +673,9 @@ class VoucherState:
         self.vfe_momo_buf: List[float] = []
         self.vfe_momo_short_entry: Optional[float] = None
         self.vfe_momo_fired: bool = False  # v12: one-shot-per-day
-        # v6_m49: Mark 49 VFE fade state
-        # m49_long_remaining counts shares we still want to BUY toward target +M49_SIZE.
-        # m49_long_until is timestamp at which to flatten LONG fade.
-        # Symmetric for SHORT side.
-        self.m49_long_until: Optional[int] = None
-        self.m49_short_until: Optional[int] = None
-        self.m49_seen: List[int] = []  # ts of recent M49 fills we've already acted on
-        # v7: Mark 55 follow-flow state
-        self.m55_flow_buf: List[int] = []
+        # v6 m01: Mark 01 VFE signal latch
+        self.m01_signal: int = 0   # +1 buy, -1 sell, 0 none
+        self.m01_age: int = 999    # ticks since last signal
 
     def to_dict(self):
         return {
@@ -687,10 +687,8 @@ class VoucherState:
             "vfe_momo_buf": getattr(self, "vfe_momo_buf", []),
             "vfe_momo_short_entry": getattr(self, "vfe_momo_short_entry", None),
             "vfe_momo_fired": getattr(self, "vfe_momo_fired", False),
-            "m49_lu": self.m49_long_until,
-            "m49_su": self.m49_short_until,
-            "m49_seen": self.m49_seen[-32:],
-            "m55_flow_buf": getattr(self, "m55_flow_buf", []),
+            "m01_signal": getattr(self, "m01_signal", 0),
+            "m01_age": getattr(self, "m01_age", 999),
         }
 
     @staticmethod
@@ -706,120 +704,9 @@ class VoucherState:
         s.vfe_momo_buf = d.get("vfe_momo_buf", [])
         s.vfe_momo_short_entry = d.get("vfe_momo_short_entry")
         s.vfe_momo_fired = d.get("vfe_momo_fired", False)
-        s.m49_long_until = d.get("m49_lu")
-        s.m49_short_until = d.get("m49_su")
-        s.m49_seen = d.get("m49_seen", [])
-        s.m55_flow_buf = d.get("m55_flow_buf", [])
+        s.m01_signal = d.get("m01_signal", 0)
+        s.m01_age = d.get("m01_age", 999)
         return s
-
-
-# ── v6: Mark 49 VFE fade ─────────────────────────────────────────────────────
-# Empirical (3-day, 105 SELLs / 17 BUYs):
-#   M49 SELL → mid +1.90 (t=+20.0) at H=1
-#   M49 BUY  → mid -1.26 (t=-4.0)  at H=1
-# Hold 10 ticks. Cap inventory contribution at +/-30.
-M49_QTY_MIN_SELL = 8     # M49 sells qty>=8 (93/105)
-M49_QTY_MIN_BUY  = 1
-
-# v7: Mark 55 follow-flow alpha
-M55_WINDOW = 50
-M55_THRESH = 30  # v7c confirmed
-M55_TAKE_SIZE = 20
-M55_POS_CAP = 60
-
-
-def _compute_m55_netflow(state, vstate):
-    """Mark 55 net flow on VFE — combines market_trades AND own_trades.
-    Returns (sum_net_flow_window, this_tick_net)."""
-    tick_net = 0
-    mts = state.market_trades.get(VEVE_SYM, []) or []
-    for t in mts:
-        if t.buyer == "Mark 55":
-            tick_net += t.quantity
-        elif t.seller == "Mark 55":
-            tick_net -= t.quantity
-    own = state.own_trades.get(VEVE_SYM, []) or []
-    for t in own:
-        if t.buyer == "Mark 55":
-            tick_net += t.quantity
-        elif t.seller == "Mark 55":
-            tick_net -= t.quantity
-    vstate.m55_flow_buf.append(tick_net)
-    if len(vstate.m55_flow_buf) > M55_WINDOW:
-        vstate.m55_flow_buf = vstate.m55_flow_buf[-M55_WINDOW:]
-    return sum(vstate.m55_flow_buf), tick_net
-M49_HOLD_TICKS = 5  # v7c sweep optimum
-M49_SIZE = 60  # v7c sweep: was 20, +\,252 def
-M49_POS_CAP = 20
-
-
-def run_mark49_fade(state, vstate):
-    """Returns (extra_orders, extra_buy, extra_sell) for VFE.
-    Triggered by Mark 49 fills in state.market_trades; flat after M49_HOLD_TICKS."""
-    P = VEVE_SYM
-    od = state.order_depths.get(P)
-    if not od or not od.buy_orders or not od.sell_orders:
-        return [], 0, 0
-
-    bb = max(od.buy_orders); ba = min(od.sell_orders)
-    pos = state.position.get(P, 0)
-    ts_now = state.timestamp
-
-    # Process market_trades for new Mark 49 fills.
-    # state.market_trades is dict[Symbol, List[Trade]]; each Trade has .timestamp,
-    # .buyer, .seller, .quantity. We dedupe via vstate.m49_seen of recent ts.
-    m_trades = (state.market_trades or {}).get(P, [])
-    seen_set = set(vstate.m49_seen)
-    for tr in m_trades:
-        if tr.timestamp in seen_set: continue
-        if tr.seller == "Mark 49" and tr.quantity >= M49_QTY_MIN_SELL:
-            # M49 sold → fade by going LONG
-            vstate.m49_long_until = ts_now + M49_HOLD_TICKS * 100
-            vstate.m49_seen.append(tr.timestamp)
-            seen_set.add(tr.timestamp)
-        elif tr.buyer == "Mark 49" and tr.quantity >= M49_QTY_MIN_BUY:
-            # M49 bought → fade by going SHORT
-            vstate.m49_short_until = ts_now + M49_HOLD_TICKS * 100
-            vstate.m49_seen.append(tr.timestamp)
-            seen_set.add(tr.timestamp)
-    # Trim seen list
-    if len(vstate.m49_seen) > 64:
-        vstate.m49_seen = vstate.m49_seen[-32:]
-
-    # Expire windows
-    if vstate.m49_long_until is not None and ts_now >= vstate.m49_long_until:
-        vstate.m49_long_until = None
-    if vstate.m49_short_until is not None and ts_now >= vstate.m49_short_until:
-        vstate.m49_short_until = None
-
-    extra: List[Order] = []
-    extra_buy = 0
-    extra_sell = 0
-
-    long_active = vstate.m49_long_until is not None
-    short_active = vstate.m49_short_until is not None
-    # If both active simultaneously (rare), prefer the LONG (stronger signal).
-    if long_active and short_active:
-        short_active = False
-
-    # Aggressive take. Empirical edge ~$2/share H=1, decaying to ~$1.9/share H=10.
-    # Spread on VFE typically 2-3, so half-spread cost = $1-1.5. Net edge $0.5-1/share.
-    # 1k probe windows have 0-2 firings (insufficient sample); alpha materializes on
-    # 10k 3-day. See intel/mark49_alpha.md for full BT matrix.
-    if long_active and pos < M49_POS_CAP:
-        target_buy = min(M49_SIZE, M49_POS_CAP - pos)
-        target_buy = min(target_buy, 200 - pos)
-        if target_buy > 0:
-            extra.append(Order(P, ba, target_buy))
-            extra_buy = target_buy
-    elif short_active and pos > -M49_POS_CAP:
-        target_sell = min(M49_SIZE, M49_POS_CAP + pos)
-        target_sell = min(target_sell, 200 + pos)
-        if target_sell > 0:
-            extra.append(Order(P, bb, -target_sell))
-            extra_sell = target_sell
-
-    return extra, extra_buy, extra_sell
 
 
 # ── VFE momentum short (v11): SHORT 200 when (mid - mid_50_ago) <= -3 ─────────
@@ -904,9 +791,54 @@ def v_get_adaptive_sigma(state, vstate):
     return median(all_recent)
 
 
+M01_SKEW_PERSIST = 5      # ticks (only fresh signal)
+M01_SKEW_QTY_MIN = 3      # filter noise
+M01_TAKE_SIZE = 8         # qty per directional bet
+M01_POS_CAP = 80          # cap m01-induced position
+
+
 def run_vouchers(state, vstate):
     orders = {}
     timestamp = state.timestamp
+
+    # v6 m01: scan VFE market_trades AND own_trades for Mark 01.
+    # Note: BT (and live) strip matched market_trades from state.market_trades — when our
+    # MM is active we eat them. So also scan own_trades, where Mark 01 may be our
+    # counterparty (buyer="Mark 01" if we sold to him; seller="Mark 01" if we bought from him).
+    vfe_market_trades = state.market_trades.get(VEVE_SYM, []) or []
+    vfe_own_trades = state.own_trades.get(VEVE_SYM, []) or []
+    new_signal = 0
+    for trd in vfe_market_trades:
+        if trd.quantity is None or abs(trd.quantity) < M01_SKEW_QTY_MIN:
+            continue
+        if getattr(trd, "buyer", "") == "Mark 01":
+            new_signal = +1
+            break
+        if getattr(trd, "seller", "") == "Mark 01":
+            new_signal = -1
+            break
+    if new_signal == 0:
+        for trd in vfe_own_trades:
+            if trd.quantity is None or abs(trd.quantity) < M01_SKEW_QTY_MIN:
+                continue
+            # Counterparty = whichever name isn't "SUBMISSION" / our id.
+            buyer = getattr(trd, "buyer", "")
+            seller = getattr(trd, "seller", "")
+            if buyer == "Mark 01":
+                # Mark 01 bought from us -> his BUY signal
+                new_signal = +1
+                break
+            if seller == "Mark 01":
+                # Mark 01 sold to us -> his SELL signal
+                new_signal = -1
+                break
+    if new_signal != 0:
+        vstate.m01_signal = new_signal
+        vstate.m01_age = 0
+    else:
+        vstate.m01_age = min(vstate.m01_age + 1, 999)
+    m01_active = vstate.m01_age < M01_SKEW_PERSIST and vstate.m01_signal != 0
+    # DIAG removed for production
 
     od_ve = state.order_depths.get(VEVE_SYM)
     # v12 Layer E: VFE spread-state aggressive lift
@@ -947,31 +879,26 @@ def run_vouchers(state, vstate):
     # v11: VFE momentum-short layer (PRE-MM, claims position headroom)
     momo_orders, momo_buy, momo_sell = run_vfe_momentum(state, vstate, [], 0, 0)
 
-    # v6_m49: Mark 49 fade layer (PRE-MM, claims position headroom)
-    m49_orders, m49_buy, m49_sell = run_mark49_fade(state, vstate)
-
-    # v7: Mark 55 follow-flow layer (PRE-MM, claims position headroom)
-    m55_orders: List[Order] = []
-    m55_buy = 0
-    m55_sell = 0
-    m55_signal, _ = _compute_m55_netflow(state, vstate)
-    if od_ve and od_ve.buy_orders and od_ve.sell_orders:
-        bb_m = max(od_ve.buy_orders); ba_m = min(od_ve.sell_orders)
+    # v6 m01: directional inside-spread take after Mark 01 signal
+    m01_orders: List[Order] = []
+    m01_buy = 0
+    m01_sell = 0
+    if m01_active and od_ve and od_ve.buy_orders and od_ve.sell_orders:
+        bb_m = max(od_ve.buy_orders)
+        ba_m = min(od_ve.sell_orders)
+        spread_m = ba_m - bb_m
         pos_m = state.position.get(VEVE_SYM, 0)
-        if m55_signal >= M55_THRESH and pos_m < M55_POS_CAP:
-            avail = -od_ve.sell_orders[ba_m]
-            room = min(M55_POS_CAP - pos_m, 200 - pos_m - layer_e_buy - m49_buy - momo_buy)
-            q = min(M55_TAKE_SIZE, avail, room)
+        if vstate.m01_signal > 0 and pos_m < M01_POS_CAP and spread_m >= 2:
+            # post inside-spread bid
+            q = min(M01_TAKE_SIZE, M01_POS_CAP - pos_m, 200 - pos_m - momo_buy)
             if q > 0:
-                m55_orders.append(Order(VEVE_SYM, ba_m, +q))
-                m55_buy = q
-        elif m55_signal <= -M55_THRESH and pos_m > -M55_POS_CAP:
-            avail = od_ve.buy_orders[bb_m]
-            room = min(M55_POS_CAP + pos_m, 200 + pos_m - layer_e_sell - m49_sell - momo_sell)
-            q = min(M55_TAKE_SIZE, avail, room)
+                m01_orders.append(Order(VEVE_SYM, int(bb_m + 1), q))
+                m01_buy = q
+        elif vstate.m01_signal < 0 and pos_m > -M01_POS_CAP and spread_m >= 2:
+            q = min(M01_TAKE_SIZE, M01_POS_CAP + pos_m, 200 + pos_m - momo_sell)
             if q > 0:
-                m55_orders.append(Order(VEVE_SYM, bb_m, -q))
-                m55_sell = q
+                m01_orders.append(Order(VEVE_SYM, int(ba_m - 1), -q))
+                m01_sell = q
 
     if od_ve and od_ve.buy_orders and od_ve.sell_orders:
         wm = v_wall_mid(od_ve)
@@ -979,9 +906,9 @@ def run_vouchers(state, vstate):
             bb = max(od_ve.buy_orders); ba = min(od_ve.sell_orders)
             pos = state.position.get(VEVE_SYM, 0)
             fv = round(wm)
-            # Account for Layer E + VFE-momentum + M49 + M55 commitments in headroom
-            tb = 200 - pos - layer_e_buy - momo_buy - m49_buy - m55_buy
-            ts = 200 + pos - layer_e_sell - momo_sell - m49_sell - m55_sell
+            # Account for Layer E + VFE-momentum + m01 commitments in headroom
+            tb = 200 - pos - layer_e_buy - momo_buy - m01_buy
+            ts = 200 + pos - layer_e_sell - momo_sell - m01_sell
             half = 100
             mbp = fv - 1 if pos > half else fv
             msp = fv + 1 if pos < -half else fv
@@ -989,12 +916,7 @@ def run_vouchers(state, vstate):
             momentum_active = vstate.vfe_momo_short_entry is not None
             if momentum_active:
                 tb = 0  # don't add long-side via WM MM while in momentum short
-            # v6 design: keep WM MM running on both sides. Tested with
-            # passive M49 entries (collided with WM, zero incremental fills),
-            # aggressive crossings (paid full spread = wiped edge),
-            # and side-suppression (no Pareto win). Final config below
-            # is the "least harmful" state — see intel/mark49_alpha.md.
-            ve_orders = list(momo_orders) + list(ve_layer_e) + list(m49_orders) + list(m55_orders)
+            ve_orders = list(momo_orders) + list(ve_layer_e) + list(m01_orders)
             for p, v in sorted(od_ve.sell_orders.items()):
                 if tb > 0 and p <= mbp:
                     q = min(tb, -v); ve_orders.append(Order(VEVE_SYM, p, q)); tb -= q
@@ -1006,10 +928,10 @@ def run_vouchers(state, vstate):
             if ts > 0:
                 ve_orders.append(Order(VEVE_SYM, max(fv + V_POST_SLACK_VE, ba - 1), -ts))
             orders[VEVE_SYM] = ve_orders
-        else:
-            fallback = list(momo_orders) + list(ve_layer_e) + list(m49_orders)
-            if fallback:
-                orders[VEVE_SYM] = fallback
+        elif momo_orders:
+            orders[VEVE_SYM] = list(momo_orders)
+        elif ve_layer_e:
+            orders[VEVE_SYM] = list(ve_layer_e)
 
     spot = v_plain_mid(state.order_depths.get(VEVE_SYM))
     if spot is None:
@@ -1314,16 +1236,6 @@ def _clamp_to_position_limits(orders_by_sym, positions, debug_log=None):
     return clamped
 
 
-# v8 HYBRID: regime-conditional yolo overlay
-YOLO_DETECT_TICKS_TS = 3000      # decide at ts=3000 (tick 30)
-YOLO_DRIFT_THRESHOLD = -1.5      # VFE must drift <= -1.5 to enter
-YOLO_VOUCHER_TARGETS = {
-    "VEV_4000": -300, "VEV_4500": -300, "VEV_5000": -300, "VEV_5100": -300,
-    "VEV_5200": -300, "VEV_5300": -300, "VEV_5400": -300, "VEV_5500": -300,
-}
-YOLO_VFE_TARGET = -200
-
-
 class Trader:
     def run(self, state: TradingState) -> Tuple[Dict[Symbol, List[Order]], int, str]:
         orders      = {p: [] for p in state.order_depths}
@@ -1335,64 +1247,19 @@ class Trader:
         except Exception:
             raw = {}
 
-        # v8 YOLO REGIME GATE (decide at ts=3000)
-        yolo_anchor = raw.get("yolo_anchor")
-        yolo_regime = raw.get("yolo_regime", None)  # None=undecided, True=short, False=skip
-        ts = state.timestamp
-        vfe_od = state.order_depths.get("VELVETFRUIT_EXTRACT")
-        vfe_mid = None
-        if vfe_od and vfe_od.buy_orders and vfe_od.sell_orders:
-            vfe_mid = (max(vfe_od.buy_orders) + min(vfe_od.sell_orders)) / 2.0
-        if yolo_anchor is None and vfe_mid is not None:
-            yolo_anchor = vfe_mid
-            raw["yolo_anchor"] = yolo_anchor
-        if yolo_regime is None and ts >= YOLO_DETECT_TICKS_TS and vfe_mid is not None and yolo_anchor is not None:
-            drift = vfe_mid - yolo_anchor
-            yolo_regime = (drift <= YOLO_DRIFT_THRESHOLD)
-            raw["yolo_regime"] = yolo_regime
-
-        # HP layer always runs
         hstate = HydrogelState.from_dict(raw.get("hg", {}))
         hydrogel_orders, hstate = run_hydrogel(state, hstate)
         orders[Product.HYDROGEL_PACK] = hydrogel_orders
         raw["hg"] = hstate.to_dict()
 
-        if yolo_regime is True:
-            # YOLO MODE — short voucher portfolio + VFE, suppress voucher MM
-            vstate = VoucherState.from_dict(raw.get("v9", {}))
-            for sym, target in YOLO_VOUCHER_TARGETS.items():
-                od_v = state.order_depths.get(sym)
-                if od_v is None or not od_v.buy_orders: continue
-                pos_v = state.position.get(sym, 0)
-                desired_short = target - pos_v  # negative if we need to sell more
-                if desired_short < 0:
-                    qty = -desired_short
-                    bb_v = max(od_v.buy_orders)
-                    avail = od_v.buy_orders[bb_v]
-                    q = min(qty, avail, 300)
-                    if q > 0:
-                        orders.setdefault(sym, []).append(Order(sym, bb_v, -q))
-            # VFE short
-            if vfe_od and vfe_od.buy_orders:
-                pos_vfe = state.position.get("VELVETFRUIT_EXTRACT", 0)
-                desired = YOLO_VFE_TARGET - pos_vfe
-                if desired < 0:
-                    qty = -desired
-                    bb = max(vfe_od.buy_orders)
-                    avail = vfe_od.buy_orders[bb]
-                    q = min(qty, avail, 200)
-                    if q > 0:
-                        orders.setdefault("VELVETFRUIT_EXTRACT", []).append(Order("VELVETFRUIT_EXTRACT", bb, -q))
-            raw["v9"] = vstate.to_dict()
-        else:
-            # v7c MODE — normal voucher MM + VFE momo + counterparty
-            vstate = VoucherState.from_dict(raw.get("v9", {}))
-            voucher_orders = run_vouchers(state, vstate)
-            for sym, ord_list in voucher_orders.items():
-                if sym not in orders: orders[sym] = []
-                orders[sym].extend(ord_list)
-            raw["v9"] = vstate.to_dict()
+        vstate = VoucherState.from_dict(raw.get("v9", {}))
+        voucher_orders = run_vouchers(state, vstate)
+        for sym, ord_list in voucher_orders.items():
+            if sym not in orders: orders[sym] = []
+            orders[sym].extend(ord_list)
+        raw["v9"] = vstate.to_dict()
 
+        # v4: Defensive position-limit clamp (no-op on validated v3 paths)
         clamp_log: List[str] = []
         orders = _clamp_to_position_limits(orders, state.position, clamp_log)
         for line in clamp_log:
