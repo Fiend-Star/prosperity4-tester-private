@@ -102,6 +102,10 @@ class Trader:
 | `trader-logic/round-1/r1_v4.py` | **Current best (website 10,624.84)** |
 | `trader-logic/round-1/r1_v17.py` | Full-R1 submitted 272466 (89,861.44) |
 | `trader-logic/round-1/r1_v18.py` | Latest — adaptive-threshold, wins synthetic and BT |
+| `trader-logic/round-3/r3_v11.py` | R3 final ($12,246 website) |
+| `trader-logic/round-4/r4_final.py` | R4 algo current candidate |
+| `trader-logic/round-4/manual/MANUAL_R4_FINAL.md` | **R4 manual — DOM_NICE_v3 recommendation** |
+| `trader-logic/round-4/manual/run_all_phases.sh` | **R4 manual 4-phase MC pipeline** |
 | `trader-logic/Prosperity_Fundamentals.pdf` | Take-Clear-Make framework |
 
 ## Backtester Calibration (Round-Agnostic)
@@ -271,6 +275,62 @@ trader-logic/round-3/
 ├── MANUAL_R3_WRITEUP.md                   # Two-bid auction analysis
 └── README.md                              # Active state + history
 ```
+
+## Round 4: "Vanilla Just Isn't Exotic Enough" (Manual Challenge — VERIFIED)
+
+R4 manual is a derivatives portfolio optimization on a single underlying AC (S0=50, σ=2.51, 3w/2w expiry options + chooser + binary put + knock-out put). Position limits per instrument; final score = mean of 100 sims × $3,000 multiplier.
+
+**Final recommendation `DOM_NICE_v3` (6 positions)**: SELL 50 AC_50_CO + BUY 500 AC_45_KO + SELL 50 AC_40_BP + BUY 50 AC_50_P_2 + BUY 50 AC_50_C_2 + **BUY 15 AC_50_C** ★. Mean **$162,069 ± $31** (10K-seed verified), Sharpe 0.511, CVaR-5% −$473k.
+
+### Critical R4 Manual Discoveries
+
+1. **Multiplier confirmed via team chat**: PnL × 3000. Brief specifies σ=2.51, 4 obs/day KO monitoring, 100-sim averaging.
+2. **DOM_NICE_v3 strict Pareto improvement** over prior DOM_NICE_v2 at z=23σ (mean +$1,043) and z=458σ (CVaR-5% +$52,272). Up-tail call hedge (AC_50_C K=50) gives more variance reduction per dollar of EV than down-tail put hedge (AC_35_P).
+3. **DROP_60C alone is σ-fragile**: at σ=2.51 → $164k, at σ=2.80 → $20k. Hedged variants robust.
+4. **KO monitoring is structural**: at 4/d (brief) → $163k, at 16/d → $98k. Same effect across all candidates.
+5. **EV is linear in position quantities** (64-subset enumeration: interaction = 0). Boundary solution provably optimal in expectation.
+6. **IMC scoring distribution wide**: SD = $343k around EV $164k for DROP_60C → 22% chance of <-$100k score, 16% chance of >$500k.
+
+### 4-Phase MC Verification Pipeline
+
+```
+trader-logic/round-4/manual/
+├── README.md                       ★ index of all files
+├── MANUAL_R4_FINAL.md              ★ DOM_NICE_v3 recommendation
+├── PHASES_1234_SYNTHESIS.md        ★ 4-phase synthesis report
+├── IMC_SCORING_SIMULATION.md       ★ empirical IMC distribution
+├── intel_recon.md                  # 3000x multiplier intel
+│
+├── phase1_huge_grid.py             # 233K candidates × 50M paths GPU sweep
+├── phase2_deep_verify.py           # Top 100 × 10B paths × 10K seeds
+├── phase3_sensitivity.py           # σ/KO/jump robustness for top 20
+├── phase4_antithetic.py            # 100M antithetic-paired CVaR for top 10
+├── run_all_phases.sh               # Orchestrator
+│
+├── imc_actual_scoring.py           # Literal IMC scoring (1M seeds + 100K bootstrap)
+├── imc_one_realization.py          # Single IMC scoring walkthrough
+├── imc_user_safe.py                # IMC distribution including USER_SAFE
+├── imc_seed_invariance.py          # Master-seed independence proof
+├── analyze_{500,10k}seeds.py       # 5 → 500 → 10K seed progression
+│
+├── r4_simulation_FINAL.py          # Canonical numpy reference
+├── test_r4_simulation.py           # 12-test correctness suite
+│
+├── results/                        # 11 JSON outputs
+├── logs/                           # 8 stdout logs
+└── archive/                        # 97 superseded experiments
+```
+
+### R4 Manual Pareto Frontier (Phase 2 10K-seed verified)
+
+| # | Mean | Sharpe | CVaR-5% | Hedge added to base DROP_60C |
+|---|---:|---:|---:|---|
+| 1 | $163,079 ± $34 | 0.474 | -$552k ± $89 | (none — base) |
+| 2 | $162,249 ± $32 | 0.495 | -$526k ± $88 | +25 AC_45_P |
+| 3 | $162,048 ± $31 | 0.511 | -$473k ± $73 | +15 AC_50_C **★ DOM_NICE_v3** |
+| 7 | $159,701 ± $26 | 0.605 | -$357k ± $57 | +25 AC_50_C +50 AC_45_P (Sharpe-optimal) |
+
+Compute: ~25 trillion strategy-paths total across 4 phases. Pipeline reusable for any future Prosperity option-portfolio challenge.
 
 ## Round 1 File Organization
 
