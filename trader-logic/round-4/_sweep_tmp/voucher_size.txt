@@ -1,0 +1,9 @@
+vmm=20 bts=30 | def=Total profit: 162,930 | imc=Total profit: 155,885
+vmm=20 bts=50 | def=Total profit: 162,930 | imc=Total profit: 155,885
+vmm=20 bts=80 | def=Total profit: 162,930 | imc=Total profit: 155,885
+vmm=40 bts=30 | def=Total profit: 163,376 | imc=Total profit: 156,182
+vmm=40 bts=50 | def=Total profit: 163,376 | imc=Total profit: 156,182
+vmm=40 bts=80 | def=Total profit: 163,376 | imc=Total profit: 156,182
+vmm=60 bts=30 | def=Total profit: 163,252 | imc=Total profit: 156,035
+vmm=60 bts=50 | def=Total profit: 163,252 | imc=Total profit: 156,035
+vmm=60 bts=80 | def=Total profit: 163,252 | imc=Total profit: 156,035

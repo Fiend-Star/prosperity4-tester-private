@@ -1,0 +1,6 @@
+tp=5 | def=Total profit: 158,946 | imc=Total profit: 151,990
+tp=8 | def=Total profit: 160,268 | imc=Total profit: 153,322
+tp=9 | def=Total profit: 159,976 | imc=Total profit: 152,690
+tp=10 | def=Total profit: 160,564 | imc=Total profit: 152,915
+tp=12 | def=Total profit: 161,014 | imc=Total profit: 153,441
+tp=15 | def=Total profit: 160,742 | imc=Total profit: 153,276

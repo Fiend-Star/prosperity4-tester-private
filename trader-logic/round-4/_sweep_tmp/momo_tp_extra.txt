@@ -1,0 +1,6 @@
+tp=6 | 1k=Total profit: 4,863 | def=Total profit: 133,440 | imc=Total profit: 125,025
+tp=7 | 1k=Total profit: 5,134 | def=Total profit: 133,753 | imc=Total profit: 125,425
+tp=8 | 1k=Total profit: 5,755 | def=Total profit: 134,515 | imc=Total profit: 126,326
+tp=9 | 1k=Total profit: 5,755 | def=Total profit: 134,708 | imc=Total profit: 126,232
+tp=12 | 1k=Total profit: 5,630 | def=Total profit: 134,352 | imc=Total profit: 125,954
+tp=20 | 1k=Total profit: 4,982 | def=Total profit: 133,043 | imc=Total profit: 125,500
