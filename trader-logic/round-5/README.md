@@ -6,19 +6,23 @@
 
 | Path | Role |
 |---|---|
-| `thedarkmarc_do_nothing.py` ★ | **Current best** — 6-product selective strategy from team Discord. Live submission **551021** = $1,725 day-4 1k. |
+| `sub_551355.py` ★ | **Current best LIVE** — thedarkmarc v2, 17-product expansion. Live $5,795 day-4 1k (3.4× v1). imc BT $5,959 → 0.97 ratio. |
+| `thedarkmarc_do_nothing.py` | thedarkmarc v1 — 6-product selective. Live sub 551021 = $1,725. imc BT $1,433 → 0.83 ratio. |
 | `oracle/god_logger_r5.py` | Zero-order trader using standard Logger.flush — submit to capture pristine live state. |
 | `archive/lab_v1_to_v11/` | Earlier all-50-product penny-MM iterations. **Bogus BT numbers** ($604k claimed) — were built with `LIMIT=80` before R5 brief revealed limit=10. With correct limit, v11 = $31k 3-day default and -$50k day 4. Kept for reference only. |
 
-## Live calibration (verified vs sub 551021, 2026-04-29)
+## Live calibration (n=2 datapoints, 2026-04-29)
 
-| Metric | day 4 1k |
-|---|--:|
-| Live (IMC leaderboard) | **$1,725** |
-| BT default mode | $433 (-75% — too pessimistic) |
-| BT imc mode | $1,433 (-17% — close match) ★ |
+| Sub | Strategy | Products | Live | imc BT | imc ratio | default BT | default ratio |
+|---|---|--:|--:|--:|--:|--:|--:|
+| 551021 | thedarkmarc v1 | 6 | $1,725 | $1,433 | 0.83 | $433 | 0.25 |
+| 551355 | thedarkmarc v2 | 17 | $5,795 | $5,959 | **0.97** ★ | -$2,404 | -0.41 |
 
-**Use `--match-mode imc` as the primary R5 BT predictor.** Default mode misses invisible-taker fills that R5 live engine actually delivers.
+**imc mode is calibrated within 3% on the broader strategy.** Calibration ratio is not constant — narrow-coverage strategies sit at 0.83, broad-coverage strategies at 0.97. Plausible mechanism: more products averaged across CRC32 hash → less per-strategy bias; broader edges → fewer marginal fills where the calibration matters.
+
+**Use `--match-mode imc` as primary R5 leaderboard predictor.** Default mode is unusable — missing invisible-taker fills inverts strategy ranking (default would say 551355 < 551021, live says 551355 > 551021 by 3.4×).
+
+`r4_v8c.py` lesson echoes here: trust imc mode for strategy ranking; absolute PnL is approximate.
 
 ## Run commands
 
@@ -44,8 +48,9 @@ Per submission `run-logs/round-5/<id>/{prices,trades,observations}_live.csv`:
 
 | Submission | Trader | Profit | Trades 1k d4 |
 |---|---|--:|--:|
-| 551021 | thedarkmarc_do_nothing | $1,725 | 1,425 |
+| 551021 | thedarkmarc v1 (6 products) | $1,725 | 1,425 |
 | 551283 | god_logger_r5 ★ | $0 | 1,416 |
+| 551355 | thedarkmarc v2 (17 products) | $5,795 | 1,433 |
 
 The 551283 god-logger CSVs were also wired into the BT as **`round 5 day 5`**:
 ```
