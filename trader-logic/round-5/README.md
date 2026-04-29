@@ -34,9 +34,47 @@ python -m prosperity4bt trader-logic/round-5/thedarkmarc_do_nothing.py 5 --no-pr
 # Capture live state (submit to IMC; BT also works for consistency check)
 python -m prosperity4bt trader-logic/round-5/oracle/god_logger_r5.py 5-4 --ticks 1000
 
-# Extract any submitted run-log into a CSV usable as a fresh dataset
-python run-logs/round-5/extract_live_csv.py 551021
+# Extract any submitted run-log triplet (prices + trades + observations)
+python run-logs/round-5/extract_live_csv.py 551283
 ```
+
+## Live datasets captured
+
+Per submission `run-logs/round-5/<id>/{prices,trades,observations}_live.csv`:
+
+| Submission | Trader | Profit | Trades 1k d4 |
+|---|---|--:|--:|
+| 551021 | thedarkmarc_do_nothing | $1,725 | 1,425 |
+| 551283 | god_logger_r5 ★ | $0 | 1,416 |
+
+The 551283 god-logger CSVs were also wired into the BT as **`round 5 day 5`**:
+```
+prosperity4bt/resources/round5/prices_round_5_day_5.csv
+prosperity4bt/resources/round5/trades_round_5_day_5.csv
+data_reader.available_days(5) → [2, 3, 4, 5]
+```
+Run with `python -m prosperity4bt <trader> 5-5`.
+
+**Verification — day 5 (LIVE) ≡ first 1k ticks of day 4 (PUBLIC):**
+- Public CSV first 1k ticks: 1,415 trades.
+- Live CSV from sub 551283: 1,415 trades.
+- thedarkmarc PnL: $433 / $1,433 (default / imc) on **both** `5-5` and `5-4 --ticks 1000` — byte-identical.
+
+Conclusion: IMC's public R5 CSV release **already is** the live engine output. There's no live-vs-CSV divergence within the available data. (My earlier "18% more taker-active live" was a bogus uniform-distribution scaling — actual trade density is front-loaded.) The `day_5` slot is therefore mostly a redundant reference, but stays useful as:
+- Direct ground-truth check for any future submission whose run differs from the public CSV (engine drift across the round).
+- Pristine market_trades stream with zero own-fill contamination (god logger only).
+- Storage slot for additional god-logger submissions on later live days.
+
+**Full 4-day sweep results (thedarkmarc):**
+| Day | default | imc |
+|---|--:|--:|
+| 2 | 59,847 | 14,944 |
+| 3 | 31,514 | 11,788 |
+| 4 (10k) | 48,932 | -3,375 |
+| 5 (1k LIVE) | 433 | 1,433 |
+| **Total** | **140,727** | **24,790** |
+
+R5 has **no observations data** (state.observations empty). Ignith / Ashflow Alpha arrives via the manual UI, not the algo runtime.
 
 ## thedarkmarc strategy summary
 
