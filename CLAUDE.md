@@ -2,6 +2,12 @@
 
 Guidance for Claude Code working with this repository. Detailed submission history, lessons, and per-round analyses live in `memory/` — see `MEMORY.md` for the index.
 
+## 🏆 IMC Prosperity 4 — FINAL: World Rank 35 / 18,803 (top 0.19%)
+
+Competition closed 2026-05-08. Cumulative ~$1.38M XIRECs across 5 rounds. R5 was the recovery round: $715k single-round bridge from "4th in cohort" to world rank 35. Full retro at [`memory/project_competition_final.md`](memory/project_competition_final.md). R5 closeout at [`memory/project_round5_final.md`](memory/project_round5_final.md).
+
+The repo from this point forward is archival — strategies in `trader-logic/round-{1..5}/` are reference templates for any future Prosperity (P5+) iteration.
+
 ## Running the Backtester
 
 ```bash
@@ -106,9 +112,10 @@ class Trader:
 | `trader-logic/round-4/r4_final.py` | R4 algo current candidate |
 | `trader-logic/round-4/manual/MANUAL_R4_FINAL.md` | **R4 manual — DOM_NICE_v3 recommendation** |
 | `trader-logic/round-4/manual/run_all_phases.sh` | **R4 manual 4-phase MC pipeline** |
-| `trader-logic/round-5/r5_v3.py` | **R5 BT champion — 20 products, imc 4-day $271k** |
-| `trader-logic/round-5/sub_551355.py` | R5 best LIVE — thedarkmarc v2, 17-product ($5,795 day-4 1k) |
-| `trader-logic/round-5/manual/ignith_analysis.py` | R5 manual portfolio optimizer (Ignith) |
+| `trader-logic/round-5/sub_581032.py` | **R5 FINAL submitted — vol-tiered MM, $613k algo** ★ |
+| `trader-logic/round-5/r5_v3.py` | R5 BT champion (20 products, $271k 4-day imc) — passed over for sub 581032 |
+| `trader-logic/round-5/sub_551355.py` | R5 mid-round LIVE checkpoint (thedarkmarc v2, $5,795 day-4 1k) |
+| `trader-logic/round-5/manual/ignith_analysis.py` | R5 manual portfolio optimizer (Ignith, $101,904 final) |
 | `trader-logic/Prosperity_Fundamentals.pdf` | Take-Clear-Make framework |
 
 ## Backtester Calibration (Round-Agnostic)
@@ -335,49 +342,49 @@ trader-logic/round-4/manual/
 
 Compute: ~25 trillion strategy-paths total across 4 phases. Pipeline reusable for any future Prosperity option-portfolio challenge.
 
-## Round 5: "The Final Stretch"
+## Round 5: "The Final Stretch" (CLOSED — $715,392 / world rank 35)
 
-50 products in 10 groups of 5 (GALAXY_SOUNDS, SLEEP_POD, MICROCHIP, PEBBLES, ROBOT, UV_VISOR, TRANSLATOR, PANEL, OXYGEN_SHAKE, SNACKPACK). **All position limits = 10** (set explicitly in `prosperity4bt/constants.py` — do NOT rely on default 80). Days 2/3/4 historical, IMC live runs day-4 1k as the leaderboard probe (also wired as `day 5` for in-BT replay).
+50 products in 10 groups of 5 (GALAXY_SOUNDS, SLEEP_POD, MICROCHIP, PEBBLES, ROBOT, UV_VISOR, TRANSLATOR, PANEL, OXYGEN_SHAKE, SNACKPACK). **All position limits = 10** (set explicitly in `prosperity4bt/constants.py` — do NOT rely on default 80).
 
-### Strategy Lineage
+### Final Result
 
-| Sub | File | Products | Live d4-1k | imc BT | imc ratio |
-|---|---|--:|--:|--:|--:|
-| 551021 | `thedarkmarc_do_nothing.py` | 6 | $1,725 | $1,433 | 0.83 |
-| 551283 | `oracle/god_logger_r5.py` | 0 | $0 | $0 | — |
-| 551355 | `sub_551355.py` ★ live best | 17 | $5,795 | $5,959 | **0.97** |
-| (BT only) | `r5_v3.py` ★ **BT champion** | 20 | TBD | $271k 4-day | — |
+**Algo $613,488 (sub 581032) + Manual $101,904 (Ignith) = $715,392.** This was the recovery round that took us from R4's drawdown to world rank 35.
 
-### r5_v3 (BT champion, unsubmitted)
+### Submitted Strategy: sub_581032.py (NOT r5_v3)
 
-20 products = 17 v2 carryover + 3 v3a additions (ROBOT_DISHES MR, ROBOT_IRONING MR, PEBBLES_L momentum). imc 4-day **$271,080 vs baseline $91,846 (+195%)**. **Day-5 LIVE proxy +$349 only** — most of the +$179k delta comes from a single-day ROBOT_DISHES jackpot (lag-1 AC: d2/d3 ≈ 0, d4 = -0.29). On d2/d3/d5-like regimes ROBOT_DISHES is a small drag (~$2k loss); on d4-like regimes it's a windfall.
+The submitted final used **volatility tiering** — three classes (hyper/volatile/semi/oxygen/default) with per-tier `(risk_av, width_bonus, obi_lean)` tuples and per-product param dicts. All 50 products active. The decisive line: `if p.startswith("OXYGEN"): fair -= 0.15 * last_ret` (explicit mean-reversion on the OXYGEN_SHAKE family).
 
-Architectural changes from v2: `STRATEGY_CONFIG` dict (per-product `type`, `reversion_coeff`, `risk_aversion`), two-pass `run()` (compute plan → emit orders), `DISABLED_PRODUCTS: set` for ablation bisection without rebuild, `conversions = 0` (R5 has no conversion mechanism).
+| Top product | PnL | % of total |
+|---|--:|--:|
+| OXYGEN_SHAKE_CHOCOLATE | $478,439 | **78%** |
+| OXYGEN_SHAKE_EVENING_BREATH | $54,380 | 9% |
+| All 4 OXYGEN_SHAKE MR products | $548,687 | **89%** |
+| Everything else (46 products) | ~$65k | 11% |
 
-Architect-gated ablation rejected: **v3b** (8 tight-spread HIDDEN_LIQUIDITY products → all ~$0 fills, HL width formula joins-not-pennies at spread ≤ 8) and **v3c** (19 wide-spread LIGHT MR products → -$600k 4-day, every addition negative on d4 imc; random-walk products generate adverse-selection on MR signal noise).
+### r5_v3.py (BT champion, passed over)
+
+20 products (17 v2 carryover + 3 v3a additions: ROBOT_DISHES MR, ROBOT_IRONING MR, PEBBLES_L momentum). imc 4-day **$271,080 vs baseline $91,846 (+195%)**. **Day-5 LIVE proxy +$349 only** — most of the +$179k delta was a single-day ROBOT_DISHES regime bet (lag-1 AC: d2/d3 ≈ 0, d4 = -0.29). The team chose the broader, vol-tiered sub_581032 instead and got a different (bigger) jackpot on OXYGEN_SHAKE_CHOCOLATE.
+
+r5_v3 architectural pieces still useful for future Prosperity: per-product `STRATEGY_CONFIG` dict (`type`, `reversion_coeff`, `risk_aversion`), two-pass `run()` (compute plan → emit orders), `DISABLED_PRODUCTS: set` for ablation bisection. Architect-gated ablation rejected v3b (8 HL tight-spread → ~$0 fills) and v3c (19 wide-spread light MR → -$600k from random-walk adverse selection).
 
 ### R5 Calibration
 
 - **imc mode is primary leaderboard predictor.** Default mode misses invisible-taker fills and inverts strategy ranking.
 - **imc ratio is strategy-dependent**, not a constant: narrow strategies (n=6) ≈ 0.83; broad strategies (n=17) ≈ 0.97. Plausible mechanism: more products averaged across CRC32 hash → less per-strategy bias.
-- **Day 5 in BT == first 1k ticks of day 4 (LIVE)** — byte-identical to public CSV. No engine-vs-CSV gap to exploit; `day_5` slot is mostly redundant. Useful only as: (1) engine-drift sanity check, (2) pristine `market_trades` stream from god logger.
+- **Day 5 in BT == first 1k ticks of day 4 (LIVE)** — byte-identical to public CSV. No engine-vs-CSV gap to exploit.
 
-### R5 Discord Intel
+### R5 Manual: Ignith Portfolio ($101,904)
 
-- **Mean reverters** (lag-1 AC ≈ −0.15): ROBOT_IRONING, OXYGEN_SHAKE_EVENING_BREATH, OXYGEN_SHAKE_CHOCOLATE.
+Quadratic fee `(volume/100)² × budget`, budget = 1,000,000, 9 goods. Solver at `trader-logic/round-5/manual/ignith_analysis.py` — calculus optimum `pct* = 50 × r` per good (Lagrangian if Σpct > 100). Final allocation deployed 76%, kept 24% reserved. **Lava cake at 18% SELL = +$81,636 (jackpot)**, Thermalite core +$10.7k, Pyroflex cells +$8.5k. 5 of 9 goods profitable.
+
+### R5 Discord Intel (cross-team EDA)
+
+- **Mean reverters** (lag-1 AC ≈ −0.15): ROBOT_IRONING, OXYGEN_SHAKE_EVENING_BREATH, OXYGEN_SHAKE_CHOCOLATE. ← biggest hit confirmed live.
 - **SNACKPACK correlations**: PIST↔STRAW +0.91, RASP↔STRAW −0.93, CHOC↔VAN −0.92, RASP↔PIST −0.83.
 - **PEBBLES**: XL vs each smaller size −0.49.
-- **Spread vs daily-range percentile**: spread widens at top of range universally (fade-the-weak-hand mean reversion plausible).
+- **Spread vs daily-range percentile**: spread widens at top of range universally.
 
-### R5 Manual: Ignith Portfolio
-
-Quadratic fee `(volume/100)² × budget`. Budget = 1,000,000. Use Ashflow Alpha news. 9 goods. Solver at `trader-logic/round-5/manual/ignith_analysis.py` — calculus optimum is `pct* = 50 × r` per good unconstrained, with Lagrangian if Σpct > 100. Ignith data is not exposed to algo runtime (`state.observations` empty).
-
-### R5 Risk Posture
-
-After R4 manual scored $12k vs $162k EV (DOM_NICE_v3 unfavorable seed sample), team consensus is **no more yolos** — favor stable selective alpha. r5_v3 is ≥ baseline on 3 of 4 days with worst-case ~$2k drag if d4 regime doesn't recur.
-
-Full R5 details, ablation results, and live calibration in [`memory/project_round5_v3.md`](memory/project_round5_v3.md) and [`memory/project_round5_setup.md`](memory/project_round5_setup.md).
+Full R5 closeout at [`memory/project_round5_final.md`](memory/project_round5_final.md). Pre-submission ablation lineage at [`memory/project_round5_v3.md`](memory/project_round5_v3.md) and [`memory/project_round5_setup.md`](memory/project_round5_setup.md).
 
 ## Round 1 File Organization
 
