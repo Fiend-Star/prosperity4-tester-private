@@ -6,10 +6,12 @@
 
 | Path | Role |
 |---|---|
-| `sub_551355.py` ★ | **Current best LIVE** — thedarkmarc v2, 17-product expansion. Live $5,795 day-4 1k (3.4× v1). imc BT $5,959 → 0.97 ratio. |
-| `thedarkmarc_do_nothing.py` | thedarkmarc v1 — 6-product selective. Live sub 551021 = $1,725. imc BT $1,433 → 0.83 ratio. |
+| `r5_v3.py` ★ | **NEW BEST BT** — 20 products. imc 4-day **$271,080 (+$179k vs baseline)**. Day 5 LIVE proxy $6,308 (+$349). Adds ROBOT_DISHES + ROBOT_IRONING + PEBBLES_L. Architect-gated ablation. |
+| `sub_551355.py` | Current best LIVE — thedarkmarc v2, 17-product. Live $5,795 day-4 1k. imc BT $5,959 → 0.97 ratio. |
+| `thedarkmarc_do_nothing.py` | thedarkmarc v1 — 6-product. Live sub 551021 = $1,725. imc BT $1,433 → 0.83 ratio. |
 | `oracle/god_logger_r5.py` | Zero-order trader using standard Logger.flush — submit to capture pristine live state. |
-| `archive/lab_v1_to_v11/` | Earlier all-50-product penny-MM iterations. **Bogus BT numbers** ($604k claimed) — were built with `LIMIT=80` before R5 brief revealed limit=10. With correct limit, v11 = $31k 3-day default and -$50k day 4. Kept for reference only. |
+| `r5_v3_alphas.txt` | Per-product AC(1) statistics (computed from R5 days 2/3/4). |
+| `archive/lab_v1_to_v11/` | Earlier all-50-product penny-MM iterations with `LIMIT=80` bug. Reference only. |
 
 ## Live calibration (n=2 datapoints, 2026-04-29)
 

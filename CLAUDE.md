@@ -8,14 +8,14 @@ Guidance for Claude Code working with this repository. Detailed submission histo
 # Set PYTHONPATH if you get "No module named 'datamodel'"
 $env:PYTHONPATH="c:\Users\gurms\PycharmProjects\imc-prosperity-4-backtester\prosperity4bt"
 
-# Current best R3 — sub 402350 → $12,246 website
+# Current best R5 — r5_v3 (BT champion): imc 4-day $271k, day-5 LIVE proxy $6,308
+python -m prosperity4bt trader-logic/round-5/r5_v3.py 5 --no-progress --no-out --match-mode imc
+python -m prosperity4bt trader-logic/round-5/r5_v3.py 5-5 --no-progress --no-out --match-mode imc  # 1k LIVE proxy
+
+# R3 best — sub 402350 → $12,246 website
 python -m prosperity4bt trader-logic/round-3/r3_v11.py 3
-
-# 1k-tick day 2 BT (matches website test exactly — verified BT×0.99=website)
-python -m prosperity4bt trader-logic/round-3/r3_v11.py 3-2 --ticks 1000 --no-out --no-progress
-
-# Full 10k 3-day BT
-python -m prosperity4bt trader-logic/round-3/r3_v11.py 3 --ticks 10000
+python -m prosperity4bt trader-logic/round-3/r3_v11.py 3-2 --ticks 1000 --no-out --no-progress  # website parity
+python -m prosperity4bt trader-logic/round-3/r3_v11.py 3 --ticks 10000                          # full 10k 3-day
 
 # Earlier rounds best
 python -m prosperity4bt trader-logic/round-1/r1_v4.py 1
@@ -24,7 +24,7 @@ python -m prosperity4bt trader-logic/round-1/r1_v4.py 1
 #   --ticks N                          max ticks to simulate (1000 = R3 website test, 10000 = full day)
 #   --iterations N                     run() called N times (usually match --ticks)
 #   --match-trades {all|worse|none}    trade matching mode (default: all)
-#   --match-mode {default|imc}         'imc' = R2-calibrated; for R3 use 'default'
+#   --match-mode {default|imc}         'imc' = calibrated mode; primary R5 leaderboard predictor
 #   --no-out / --no-progress / --print
 ```
 
@@ -106,6 +106,9 @@ class Trader:
 | `trader-logic/round-4/r4_final.py` | R4 algo current candidate |
 | `trader-logic/round-4/manual/MANUAL_R4_FINAL.md` | **R4 manual — DOM_NICE_v3 recommendation** |
 | `trader-logic/round-4/manual/run_all_phases.sh` | **R4 manual 4-phase MC pipeline** |
+| `trader-logic/round-5/r5_v3.py` | **R5 BT champion — 20 products, imc 4-day $271k** |
+| `trader-logic/round-5/sub_551355.py` | R5 best LIVE — thedarkmarc v2, 17-product ($5,795 day-4 1k) |
+| `trader-logic/round-5/manual/ignith_analysis.py` | R5 manual portfolio optimizer (Ignith) |
 | `trader-logic/Prosperity_Fundamentals.pdf` | Take-Clear-Make framework |
 
 ## Backtester Calibration (Round-Agnostic)
@@ -331,6 +334,50 @@ trader-logic/round-4/manual/
 | 7 | $159,701 ± $26 | 0.605 | -$357k ± $57 | +25 AC_50_C +50 AC_45_P (Sharpe-optimal) |
 
 Compute: ~25 trillion strategy-paths total across 4 phases. Pipeline reusable for any future Prosperity option-portfolio challenge.
+
+## Round 5: "The Final Stretch"
+
+50 products in 10 groups of 5 (GALAXY_SOUNDS, SLEEP_POD, MICROCHIP, PEBBLES, ROBOT, UV_VISOR, TRANSLATOR, PANEL, OXYGEN_SHAKE, SNACKPACK). **All position limits = 10** (set explicitly in `prosperity4bt/constants.py` — do NOT rely on default 80). Days 2/3/4 historical, IMC live runs day-4 1k as the leaderboard probe (also wired as `day 5` for in-BT replay).
+
+### Strategy Lineage
+
+| Sub | File | Products | Live d4-1k | imc BT | imc ratio |
+|---|---|--:|--:|--:|--:|
+| 551021 | `thedarkmarc_do_nothing.py` | 6 | $1,725 | $1,433 | 0.83 |
+| 551283 | `oracle/god_logger_r5.py` | 0 | $0 | $0 | — |
+| 551355 | `sub_551355.py` ★ live best | 17 | $5,795 | $5,959 | **0.97** |
+| (BT only) | `r5_v3.py` ★ **BT champion** | 20 | TBD | $271k 4-day | — |
+
+### r5_v3 (BT champion, unsubmitted)
+
+20 products = 17 v2 carryover + 3 v3a additions (ROBOT_DISHES MR, ROBOT_IRONING MR, PEBBLES_L momentum). imc 4-day **$271,080 vs baseline $91,846 (+195%)**. **Day-5 LIVE proxy +$349 only** — most of the +$179k delta comes from a single-day ROBOT_DISHES jackpot (lag-1 AC: d2/d3 ≈ 0, d4 = -0.29). On d2/d3/d5-like regimes ROBOT_DISHES is a small drag (~$2k loss); on d4-like regimes it's a windfall.
+
+Architectural changes from v2: `STRATEGY_CONFIG` dict (per-product `type`, `reversion_coeff`, `risk_aversion`), two-pass `run()` (compute plan → emit orders), `DISABLED_PRODUCTS: set` for ablation bisection without rebuild, `conversions = 0` (R5 has no conversion mechanism).
+
+Architect-gated ablation rejected: **v3b** (8 tight-spread HIDDEN_LIQUIDITY products → all ~$0 fills, HL width formula joins-not-pennies at spread ≤ 8) and **v3c** (19 wide-spread LIGHT MR products → -$600k 4-day, every addition negative on d4 imc; random-walk products generate adverse-selection on MR signal noise).
+
+### R5 Calibration
+
+- **imc mode is primary leaderboard predictor.** Default mode misses invisible-taker fills and inverts strategy ranking.
+- **imc ratio is strategy-dependent**, not a constant: narrow strategies (n=6) ≈ 0.83; broad strategies (n=17) ≈ 0.97. Plausible mechanism: more products averaged across CRC32 hash → less per-strategy bias.
+- **Day 5 in BT == first 1k ticks of day 4 (LIVE)** — byte-identical to public CSV. No engine-vs-CSV gap to exploit; `day_5` slot is mostly redundant. Useful only as: (1) engine-drift sanity check, (2) pristine `market_trades` stream from god logger.
+
+### R5 Discord Intel
+
+- **Mean reverters** (lag-1 AC ≈ −0.15): ROBOT_IRONING, OXYGEN_SHAKE_EVENING_BREATH, OXYGEN_SHAKE_CHOCOLATE.
+- **SNACKPACK correlations**: PIST↔STRAW +0.91, RASP↔STRAW −0.93, CHOC↔VAN −0.92, RASP↔PIST −0.83.
+- **PEBBLES**: XL vs each smaller size −0.49.
+- **Spread vs daily-range percentile**: spread widens at top of range universally (fade-the-weak-hand mean reversion plausible).
+
+### R5 Manual: Ignith Portfolio
+
+Quadratic fee `(volume/100)² × budget`. Budget = 1,000,000. Use Ashflow Alpha news. 9 goods. Solver at `trader-logic/round-5/manual/ignith_analysis.py` — calculus optimum is `pct* = 50 × r` per good unconstrained, with Lagrangian if Σpct > 100. Ignith data is not exposed to algo runtime (`state.observations` empty).
+
+### R5 Risk Posture
+
+After R4 manual scored $12k vs $162k EV (DOM_NICE_v3 unfavorable seed sample), team consensus is **no more yolos** — favor stable selective alpha. r5_v3 is ≥ baseline on 3 of 4 days with worst-case ~$2k drag if d4 regime doesn't recur.
+
+Full R5 details, ablation results, and live calibration in [`memory/project_round5_v3.md`](memory/project_round5_v3.md) and [`memory/project_round5_setup.md`](memory/project_round5_setup.md).
 
 ## Round 1 File Organization
 
